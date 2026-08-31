@@ -15,7 +15,7 @@
 | 排程 | Hermes cron | 每日定時自動執行（時段待定） |
 | 發現腳本 | Python 3 標準庫（無第三方依賴） | `scripts/discover.py` |
 | 狀態儲存 | `pipeline_state.json` | 已見記錄、增量 watermark |
-| 每個招標 | `dossiers/<編號>_<名稱>/` | `state.json`、`docs/`、`01_digest.md`、`02_compliance.md` |
+| 每個招標 | `dossiers/<tender_id>/` | `state.json`、`docs/`、`01_digest.md`、`02_compliance.md` |
 
 ```
 每日 cron 叫醒 Hermes
@@ -40,9 +40,14 @@ tender-pipeline/
 ├── README.md                  # 本文件
 ├── .hermes/plans/             # 實施計劃
 ├── scripts/discover.py        # 第一步：Conneciz 公開 API 發現腳本
+├── scripts/serper.py          # 第二步：Serper Google 搜尋（urls + snippets）
+├── scripts/reader.py          # 第二步：Jina Reader 讀頁 + 抽招標方/編號/截止
+├── scripts/common.py          # 共用：.env 讀取 + SSL fallback
+├── scripts/utils.py           # 狀態工具：列出／批量改狀態／下載招標文件
+├── .env / .env.example        # API keys（.env 已 gitignore）
 ├── pipeline_state.json        # 狀態（自動生成）
 └── dossiers/                  # 每個招標一個資料夾（自動生成）
-    └── <TenderNo>_<short-name>/
+    └── <tender_id>/
         ├── state.json         # 該招標嘅處理狀態
         ├── docs/              # 招標文件（下載或用戶放入）
         ├── 01_digest.md       # 項目摘要
@@ -103,6 +108,63 @@ python3 scripts/discover.py --since 2026-08-20T00:00:00.000Z
 > - `--since` 嘅時間戳要用 ISO 8601 UTC，例如 `2026-08-20T00:00:00.000Z`。
 > - `--since` 只係唔推前 watermark；若佢拉到新記錄，仍會寫入 `tenders_seen`（唔係純唯讀 dry-run）。
 > - 對 Conneciz 只作只讀查詢（公開 API，無登入），每頁間隔 0.3 秒。
+
+### 核實（Step 2）：`serper.py` + `reader.py`
+
+Conneciz 只做發現；呢一步由 agent 呼叫兩個簡單工具嚟搵官方來源：
+
+- **`reader.py`** — Jina Reader 讀頁。先用 `--extract` 讀 Conneciz 詳情頁，攞「招標方」
+  （issuer）、招標號碼、截止日期。
+- **`serper.py`** — Serper Google 搜尋，用招標號碼 + 招標方 + 標題做查詢，攞一堆
+  （標題 + 網址 + 摘要）結果。
+- agent 憑摘要揀相關結果，再逐個用 `reader.py` 讀返官方頁內容，最後出摘要。
+
+**首次設定**：複製 `.env.example` 做 `.env` 並填入 key（已 gitignore）：
+
+```bash
+cp .env.example .env
+# 編輯 .env 填入 SERPER_API_KEY 同 JINA_API_KEY
+```
+
+**用法**：
+
+```bash
+# 讀 Conneciz 詳情頁，抽招標方／編號／截止日期
+python3 scripts/reader.py --url <conneciz_url> --extract
+
+# Google 搜尋（用上面攞到嘅編號 + 招標方）
+python3 scripts/serper.py --query "PTCSQ00526 懲教署 招標"
+
+# 讀返 agent 揀中嘅官方頁全文
+python3 scripts/reader.py --url <official_url>
+```
+
+| 工具 | 旗標 | 作用 |
+|---|---|---|
+| `reader.py` | `--url <URL>` | 讀頁，輸出 markdown 全文 |
+| | `--extract` | 抽 `issuer`／`tender_no`／`deadline`／`doc_links`（JSON） |
+| | `--max-chars <N>` | 全文截斷（0 = 唔截） |
+| `serper.py` | `--query <q>` | 搜尋字串 |
+| | `--num` / `--gl` / `--hl` | 數量／地區／語言 |
+
+深度語義抽取留畀 Step 4。**每個招標一個獨立目錄** `dossiers/<tender_id>/`，內放
+`state.json`、`docs/`、`01_digest.md`、`02_compliance.md`（見下方狀態機）。
+
+### 取得文件（Step 3 C1）：`utils.py --download`
+
+官方頁有直接 PDF／DOCX 連結時，用 `--download` 直接下載入 dossier：
+
+```bash
+python3 scripts/utils.py --download <tender_id> --urls <url1> [url2 ...] [--max-mb 100]
+```
+
+- 逐個 URL stream 落 `dossiers/<tender_id>/docs/`（`.part` → `os.replace` 原子寫入），
+  檔名由 `Content-Disposition` → URL path → `Content-Type` 推斷。
+- 輸出 JSON `{tender_id, dir, results:[{url, ok, file, size, sha1}], downloaded, requested}`；
+  任一 URL 失敗回非零 exit code，但單檔失敗唔會中止成批。
+- 重用 `common.urlopen`（SSL fallback）+ `common.UA`；全程零登入。
+- 攞 `doc_links`：`reader.py --url <conneciz_url> --extract`。佢**唔會**自動推前狀態——
+  下載成功後再 `--set-status downloaded --ids <tender_id>`。
 
 ## 狀態機（每個招標）
 

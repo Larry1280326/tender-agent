@@ -29,6 +29,8 @@ STATE_FILE = Path(__file__).resolve().parent.parent / "pipeline_state.json"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 tender-pipeline"
 PAGE_SIZE = 100
 MAX_PAGES = 30  # 安全上限，防止無限迴圈
+STATUSES = ("discovered", "searched", "downloaded", "digested")  # 處理狀態（happy path）
+DEFAULT_STATUS = "discovered"
 
 # SSL 證書：預設 context 失敗時退回 macOS 系統根證書
 # （python.org 安裝嘅 Python 有時搵唔到系統 CA）
@@ -107,13 +109,16 @@ def load_state() -> dict:
         migrated = {}
         for rid, v in seen.items():
             if isinstance(v, str):
-                migrated[rid] = {"first_seen": v, "url": "", "title_en": "", "title_zh": ""}
+                migrated[rid] = {"first_seen": v, "url": "", "title_en": "",
+                                 "title_zh": "", "status": DEFAULT_STATUS, "status_at": v}
             elif isinstance(v, dict):
                 migrated[rid] = {
                     "first_seen": v.get("first_seen", v.get("modified", "")),
                     "url": v.get("url", ""),
                     "title_en": v.get("title_en", ""),
                     "title_zh": v.get("title_zh", ""),
+                    "status": v.get("status", DEFAULT_STATUS),
+                    "status_at": v.get("status_at", v.get("first_seen", "")),
                 }
         state["tenders_seen"] = migrated
         return state
@@ -154,13 +159,15 @@ def slim(rec: dict) -> dict:
 
 
 def seen_entry(rec: dict, first_seen: str) -> dict:
-    """已見記錄：只保留 first_seen + url + 標題。"""
+    """已見記錄：只保留 first_seen + url + 標題 + 處理狀態。"""
     slug = rec.get("Slug") or ""
     return {
         "first_seen": first_seen,
         "url": f"https://conneciz.app/view-tender/{slug}" if slug else "",
         "title_en": (rec.get("Subject_EN") or "").strip(),
         "title_zh": (rec.get("Subject_ZH") or "").strip(),
+        "status": DEFAULT_STATUS,
+        "status_at": first_seen,
     }
 
 
@@ -205,9 +212,12 @@ def main() -> int:
         rid = record_id(rec)
         s = slim(rec)
         if rid in state["tenders_seen"]:
-            # 刷新 url／標題（保留 first_seen）
-            first_seen = state["tenders_seen"][rid].get("first_seen", "")
-            state["tenders_seen"][rid] = seen_entry(rec, first_seen)
+            # 刷新 url／標題（保留 first_seen + 處理狀態）
+            prev = state["tenders_seen"][rid]
+            entry = seen_entry(rec, prev.get("first_seen", ""))
+            entry["status"] = prev.get("status", DEFAULT_STATUS)
+            entry["status_at"] = prev.get("status_at", prev.get("first_seen", ""))
+            state["tenders_seen"][rid] = entry
             updated += 1
         else:
             s["first_seen"] = run_ts
