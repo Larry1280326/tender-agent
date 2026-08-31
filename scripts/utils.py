@@ -49,6 +49,7 @@ def list_state(state: dict) -> dict:
             "url": entry.get("url", ""),
             "title_en": entry.get("title_en", ""),
             "title_zh": entry.get("title_zh", ""),
+            "deadline": entry.get("deadline", ""),
             "status": entry.get("status", DEFAULT_STATUS),
             "status_at": entry.get("status_at", ""),
         }

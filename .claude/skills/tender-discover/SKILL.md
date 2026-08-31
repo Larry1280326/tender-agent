@@ -17,7 +17,9 @@ tender against official sources.
 
 Step 1 — `scripts/discover.py` queries the Conneciz public API (no login) for
 tender listings, diffs them against a local seen-set in `pipeline_state.json`,
-and prints JSON with any new records. Two modes:
+and prints JSON with any new records. By default it only fetches records whose
+deadline (`ClosingDateTime`) is between `now+2d` and `now+365d` (tune with
+`--min-days-ahead` / `--max-days-ahead`). Two modes:
 
 - **incremental** (default) — fetch records newer than the stored watermark;
   report `new` + `updated`. This is the daily operation.
@@ -54,6 +56,8 @@ python3 scripts/discover.py --since 2026-08-20T00:00:00.000Z
 | `--baseline` | Mark the past N days seen; never reports new. Auto-runs on first run (no watermark yet). |
 | `--since <ts>` | Explicit ISO-8601-UTC start timestamp. In incremental mode it does NOT advance the stored watermark, but still writes newly-seen records to state. |
 | `--lookback-days <N>` | Baseline window in days (default 7). Ignored outside baseline. |
+| `--min-days-ahead <N>` | Only fetch records whose deadline is at least N days out (default 2). Applied in both modes. |
+| `--max-days-ahead <N>` | Only fetch records whose deadline is within N days (default 365). Drops year-2504 placeholder deadlines. Applied in both modes. |
 
 ## Interpreting output
 
@@ -62,7 +66,7 @@ stdout is one JSON object:
 ```json
 {
   "run":     {"mode": "incremental", "at": "...", "since": "...", "fetched": 12},
-  "new":     [{"_id": "...", "tender_ref": "...", "title_en": "...", "title_zh": "...", "category": "...", "created": "...", "modified": "...", "url": "...", "first_seen": "..."}],
+  "new":     [{"_id": "...", "tender_ref": "...", "title_en": "...", "title_zh": "...", "category": "...", "created": "...", "modified": "...", "deadline": "...", "url": "...", "first_seen": "..."}],
   "updated": 3
 }
 ```
@@ -72,7 +76,7 @@ stdout is one JSON object:
 
 ## State file (`pipeline_state.json`)
 
-- `tenders_seen` — id → `{first_seen, url, title_en, title_zh, status, status_at}`.
+- `tenders_seen` — id → `{first_seen, url, title_en, title_zh, deadline, status, status_at}`.
 - `watermark_ts` — high-water mark; incremental runs look only newer than this.
 - `baseline_ts` — when the baseline was last (re)established.
 
@@ -174,6 +178,11 @@ Both tools exit with a missing-key error if the env var isn't set.
 ## Data quality — filter BEFORE reporting/feeding Step 2
 
 The Conneciz feed is raw and noisy. Apply these filters to `new` records:
+
+0. **Deadline range (already applied at query level)** — `discover.py` filters
+   `now+2d < ClosingDateTime < now+365d` by default, so far-future placeholder
+   deadlines (year 2504, e.g. `2504-07-10T08:00:00.000Z`) and soon-closing
+   tenders never reach `new`. No manual action needed.
 
 1. **Placeholder / junk titles** — skip records whose title matches any of:
    `Unknown Subject`, `招標公告`, `Tender Announcement`, `Tender`, `招標`,

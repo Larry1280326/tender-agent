@@ -65,6 +65,11 @@ tender-pipeline/
 | `--baseline` | 重設基線：把過去 N 日記錄標為「已見」，不報新項目 | 關閉（首次執行、無 `watermark_ts` 時會自動進入基線模式） |
 | `--since <ts>` | 手動指定起始時間戳（ISO 8601 UTC），覆蓋預設起始點 | 增量用 `watermark_ts`；基線用 `now - lookback_days` |
 | `--lookback-days <N>` | 基線回望日數（只在 `--baseline` 生效） | `7` |
+| `--min-days-ahead <N>` | 只抓截止日在 N 日後嘅項目 | `2` |
+| `--max-days-ahead <N>` | 只抓截止日喺 N 日內嘅項目（剔 year-2504 佔位資料） | `365` |
+
+> 預設會套用截止日過濾：只抓 `ClosingDateTime` 落在「今天 +2 日」至「今天 +365 日」範圍內嘅項目，
+> 又快截止（<2 日）又遠期佔位（year 2504）嘅記錄一律唔報。
 
 ### 例子
 
@@ -94,7 +99,8 @@ python3 scripts/discover.py --baseline --since 2026-08-01T00:00:00.000Z
 python3 scripts/discover.py
 ```
 
-以 `watermark_ts` 為起點，只報「新」或「改動過」嘅項目，並推前 watermark。
+以 `watermark_ts` 為起點，只報「新」或「改動過」嘅項目，並推前 watermark。預設只睇截止日在
+「今天 +2 日」至「今天 +365 日」內嘅項目。
 
 **⑤ 測試／手動 watermark（唔會推前已存 `watermark_ts`）**
 

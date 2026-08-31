@@ -6,6 +6,7 @@
     python3 scripts/discover.py --baseline       # 重設基線（過去 N 日視為「已見」）
     python3 scripts/discover.py --since <ts>     # 手動 watermark（測試用，不改狀態 watermark）
     python3 scripts/discover.py --lookback-days 7   # 基線回望日數（預設 7，只喺 --baseline 生效）
+    python3 scripts/discover.py --min-days-ahead 2 --max-days-ahead 365  # 截止日上下界（預設即套用）
 
 stdout JSON 結構:
     {"run": {...}, "new": [...], "updated": N}
@@ -44,19 +45,34 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def fetch_page(since: str | None, limit: int = PAGE_SIZE) -> list[dict]:
-    """攞一頁記錄：Modified Date > since，按 Modified Date 遞減排序。"""
+def fetch_page(
+    since: str | None,
+    limit: int = PAGE_SIZE,
+    deadline_min: str | None = None,
+    deadline_max: str | None = None,
+) -> list[dict]:
+    """攞一頁記錄：Modified Date > since（且截止日在 [deadline_min, deadline_max] 內），
+    按 ClosingDateTime 遞減排序。"""
     params = {
         "limit": str(limit),
         "sort_field": "ClosingDateTime",
-        "descending": "true",
+        "descending": "True",
     }
+    constraints = []
     if since:
-        constraints = json.dumps(
-            [{"key": "Modified Date", "constraint_type": "greater than", "value": since}],
-            ensure_ascii=False,
+        constraints.append(
+            {"key": "Modified Date", "constraint_type": "greater than", "value": since}
         )
-        params["constraints"] = constraints
+    if deadline_min:
+        constraints.append(
+            {"key": "ClosingDateTime", "constraint_type": "greater than", "value": deadline_min}
+        )
+    if deadline_max:
+        constraints.append(
+            {"key": "ClosingDateTime", "constraint_type": "less than", "value": deadline_max}
+        )
+    if constraints:
+        params["constraints"] = json.dumps(constraints, ensure_ascii=False)
     url = f"{API}?{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
     last_err = None
     for ctx in _SSL_CONTEXTS:
@@ -76,13 +92,18 @@ def fetch_page(since: str | None, limit: int = PAGE_SIZE) -> list[dict]:
     raise last_err  # type: ignore[misc]
 
 
-def iter_since(since: str | None) -> list[dict]:
-    """攞晒 Modified Date > since 嘅記錄（watermark 分頁：本頁最舊時間作下一頁基準）。"""
+def iter_since(
+    since: str | None,
+    deadline_min: str | None = None,
+    deadline_max: str | None = None,
+) -> list[dict]:
+    """攞晒 Modified Date > since 嘅記錄（watermark 分頁：本頁最舊時間作下一頁基準），
+    可選加截止日上下界。"""
     out: list[dict] = []
     seen_ids: set[str] = set()
     cur = since
     for _ in range(MAX_PAGES):
-        page = fetch_page(cur)
+        page = fetch_page(cur, deadline_min=deadline_min, deadline_max=deadline_max)
         if not page:
             break
         fresh = [r for r in page if r.get("_id") not in seen_ids]
@@ -110,13 +131,15 @@ def load_state() -> dict:
         for rid, v in seen.items():
             if isinstance(v, str):
                 migrated[rid] = {"first_seen": v, "url": "", "title_en": "",
-                                 "title_zh": "", "status": DEFAULT_STATUS, "status_at": v}
+                                 "title_zh": "", "deadline": "",
+                                 "status": DEFAULT_STATUS, "status_at": v}
             elif isinstance(v, dict):
                 migrated[rid] = {
                     "first_seen": v.get("first_seen", v.get("modified", "")),
                     "url": v.get("url", ""),
                     "title_en": v.get("title_en", ""),
                     "title_zh": v.get("title_zh", ""),
+                    "deadline": v.get("deadline", ""),
                     "status": v.get("status", DEFAULT_STATUS),
                     "status_at": v.get("status_at", v.get("first_seen", "")),
                 }
@@ -154,6 +177,7 @@ def slim(rec: dict) -> dict:
         "category": rec.get("Tender Category") or "",
         "created": rec.get("Created Date") or "",
         "modified": rec.get("Modified Date") or "",
+        "deadline": rec.get("ClosingDateTime") or "",
         "url": f"https://conneciz.app/view-tender/{slug}" if slug else "",
     }
 
@@ -166,6 +190,7 @@ def seen_entry(rec: dict, first_seen: str) -> dict:
         "url": f"https://conneciz.app/view-tender/{slug}" if slug else "",
         "title_en": (rec.get("Subject_EN") or "").strip(),
         "title_zh": (rec.get("Subject_ZH") or "").strip(),
+        "deadline": rec.get("ClosingDateTime") or "",
         "status": DEFAULT_STATUS,
         "status_at": first_seen,
     }
@@ -176,17 +201,24 @@ def main() -> int:
     ap.add_argument("--baseline", action="store_true", help="重設基線")
     ap.add_argument("--since", default=None, help="手動 watermark（ISO ts，測試用）")
     ap.add_argument("--lookback-days", type=int, default=7, help="基線回望日數")
+    ap.add_argument("--min-days-ahead", type=int, default=2,
+                    help="只抓截止日在 N 日後嘅項目（預設 2）")
+    ap.add_argument("--max-days-ahead", type=int, default=365,
+                    help="只抓截止日喺 N 日內嘅項目（預設 365，剔 year-2504 佔位資料）")
     args = ap.parse_args()
 
     state = load_state()
     run_ts = now_iso()
+    now = datetime.now(timezone.utc)
+    deadline_min = (now + timedelta(days=args.min_days_ahead)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    deadline_max = (now + timedelta(days=args.max_days_ahead)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     # ── 基線模式：過去 N 日記錄一律視為「已見」，不報新項目 ──
     if args.baseline or not state.get("watermark_ts"):
         since = args.since or (
             datetime.now(timezone.utc) - timedelta(days=args.lookback_days)
         ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        records = iter_since(since)
+        records = iter_since(since, deadline_min, deadline_max)
         for rec in records:
             rid = record_id(rec)
             state["tenders_seen"][rid] = seen_entry(rec, rec.get("Modified Date") or "")
@@ -204,7 +236,7 @@ def main() -> int:
 
     # ── 增量模式 ──
     since = args.since or state["watermark_ts"]
-    records = iter_since(since)
+    records = iter_since(since, deadline_min, deadline_max)
     new_records: list[dict] = []
     updated = 0
     max_mt = since or ""
