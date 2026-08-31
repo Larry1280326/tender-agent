@@ -5,7 +5,7 @@
     python3 scripts/discover.py                  # 增量檢查，輸出 JSON
     python3 scripts/discover.py --baseline       # 重設基線（過去 N 日視為「已見」）
     python3 scripts/discover.py --since <ts>     # 手動 watermark（測試用，不改狀態 watermark）
-    python3 scripts/discover.py --lookback-days 7
+    python3 scripts/discover.py --lookback-days 7   # 基線回望日數（預設 7，只喺 --baseline 生效）
 
 stdout JSON 結構:
     {"run": {...}, "new": [...], "updated": N}
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import ssl
 import sys
 import time
@@ -45,7 +46,7 @@ def fetch_page(since: str | None, limit: int = PAGE_SIZE) -> list[dict]:
     """攞一頁記錄：Modified Date > since，按 Modified Date 遞減排序。"""
     params = {
         "limit": str(limit),
-        "sort_field": "Modified Date",
+        "sort_field": "ClosingDateTime",
         "descending": "true",
     }
     if since:
@@ -100,15 +101,32 @@ def iter_since(since: str | None) -> list[dict]:
 
 def load_state() -> dict:
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        # 遷移：統一為 {first_seen, url, title_en, title_zh}
+        seen = state.get("tenders_seen", {})
+        migrated = {}
+        for rid, v in seen.items():
+            if isinstance(v, str):
+                migrated[rid] = {"first_seen": v, "url": "", "title_en": "", "title_zh": ""}
+            elif isinstance(v, dict):
+                migrated[rid] = {
+                    "first_seen": v.get("first_seen", v.get("modified", "")),
+                    "url": v.get("url", ""),
+                    "title_en": v.get("title_en", ""),
+                    "title_zh": v.get("title_zh", ""),
+                }
+        state["tenders_seen"] = migrated
+        return state
     return {"tenders_seen": {}, "watermark_ts": None, "baseline_ts": None}
 
 
 def save_state(state: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(
+    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    tmp.write_text(
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(tmp, STATE_FILE)
 
 
 def record_id(rec: dict) -> str:
@@ -135,6 +153,17 @@ def slim(rec: dict) -> dict:
     }
 
 
+def seen_entry(rec: dict, first_seen: str) -> dict:
+    """已見記錄：只保留 first_seen + url + 標題。"""
+    slug = rec.get("Slug") or ""
+    return {
+        "first_seen": first_seen,
+        "url": f"https://conneciz.app/view-tender/{slug}" if slug else "",
+        "title_en": (rec.get("Subject_EN") or "").strip(),
+        "title_zh": (rec.get("Subject_ZH") or "").strip(),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Conneciz 公開 API 招標發現")
     ap.add_argument("--baseline", action="store_true", help="重設基線")
@@ -153,9 +182,7 @@ def main() -> int:
         records = iter_since(since)
         for rec in records:
             rid = record_id(rec)
-            s = slim(rec)
-            s["first_seen"] = s["modified"]
-            state["tenders_seen"][rid] = s
+            state["tenders_seen"][rid] = seen_entry(rec, rec.get("Modified Date") or "")
         watermark = max((r.get("Modified Date", "") for r in records), default=since)
         state["watermark_ts"] = watermark
         state["baseline_ts"] = run_ts
@@ -178,18 +205,22 @@ def main() -> int:
         rid = record_id(rec)
         s = slim(rec)
         if rid in state["tenders_seen"]:
-            state["tenders_seen"][rid].update(s)
+            # 刷新 url／標題（保留 first_seen）
+            first_seen = state["tenders_seen"][rid].get("first_seen", "")
+            state["tenders_seen"][rid] = seen_entry(rec, first_seen)
             updated += 1
         else:
             s["first_seen"] = run_ts
-            state["tenders_seen"][rid] = s
+            state["tenders_seen"][rid] = seen_entry(rec, run_ts)
             new_records.append(s)
         if (rec.get("Modified Date") or "") > max_mt:
             max_mt = rec.get("Modified Date") or ""
     # 只喺正常 run（無 --since override）先推前 watermark
     if not args.since and max_mt != since:
         state["watermark_ts"] = max_mt
-    save_state(state)
+    # 冇變化就唔寫檔（避免每日空跑都重寫成個 JSON）
+    if new_records or updated:
+        save_state(state)
 
     print(json.dumps({
         "run": {"mode": "incremental", "at": run_ts, "since": since,

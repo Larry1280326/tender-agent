@@ -51,16 +51,58 @@ tender-pipeline/
 
 ## 用法
 
-```bash
-# 首次：設定基線（視過去 7 日記錄為「已見」，不會報新項目）
-python3 scripts/discover.py --baseline
+無任何第三方依賴，直接用系統 Python 3 執行。
 
-# 日常：增量檢查（只報新項目，輸出 JSON）
+### 旗標一覽
+
+| 旗標 | 作用 | 預設 |
+|---|---|---|
+| `--baseline` | 重設基線：把過去 N 日記錄標為「已見」，不報新項目 | 關閉（首次執行、無 `watermark_ts` 時會自動進入基線模式） |
+| `--since <ts>` | 手動指定起始時間戳（ISO 8601 UTC），覆蓋預設起始點 | 增量用 `watermark_ts`；基線用 `now - lookback_days` |
+| `--lookback-days <N>` | 基線回望日數（只在 `--baseline` 生效） | `7` |
+
+### 例子
+
+**① 首次設定基線（預設回望 7 日）**
+
+```bash
+python3 scripts/discover.py --baseline
+```
+
+把最近 7 日內改動過嘅記錄標為「已見」，之後唔會當新項目報。輸出 `"new": []`。
+
+**② 基線但回望 30 日**（想一次過涵蓋更長歷史）
+
+```bash
+python3 scripts/discover.py --baseline --lookback-days 30
+```
+
+**③ 基線但由指定時間起計**（`--since` 會覆蓋 `--lookback-days`）
+
+```bash
+python3 scripts/discover.py --baseline --since 2026-08-01T00:00:00.000Z
+```
+
+**④ 日常增量檢查（無旗標）**
+
+```bash
 python3 scripts/discover.py
 ```
 
-- 無任何依賴，直接以系統 Python 3 執行。
-- 對 Conneciz 只作只讀查詢（公開 API，無登入），每頁間隔 0.3 秒。
+以 `watermark_ts` 為起點，只報「新」或「改動過」嘅項目，並推前 watermark。
+
+**⑤ 測試／手動 watermark（唔會推前已存 `watermark_ts`）**
+
+```bash
+python3 scripts/discover.py --since 2026-08-20T00:00:00.000Z
+```
+
+模擬「如果 watermark 係 8 月 20 日」會見到咩新項目，用嚟測試或排查。
+
+> 注意：
+> - `--since` 嘅時間戳要用 ISO 8601 UTC，例如 `2026-08-20T00:00:00.000Z`。
+> - `--since` 只係唔推前 watermark；若佢拉到新記錄，仍會寫入 `tenders_seen`（唔係純唯讀 dry-run）。
+> - 對 Conneciz 只作只讀查詢（公開 API，無登入），每頁間隔 0.3 秒。
 
 ## 狀態機（每個招標）
 
