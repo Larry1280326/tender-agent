@@ -74,11 +74,72 @@ def _safe_name(name: str) -> str:
     return name or "download"
 
 
-def download(url: str, dest_dir: Path, idx: int, max_bytes: int) -> dict:
-    """下載一個 URL 到 dest_dir（stream 落 .part，成功先 os.replace，附 SHA1）。"""
+# HTML client-side redirect（JS / meta refresh）判定。urlopen 只跟 HTTP 3xx，
+# 唔會執行 JS，所以一啲內容伺服器（如 HA ha_view_content.asp）回傳 HTML 內藏
+# window.open('/xxx.pdf') 就唔會落到檔。
+_HTML_EXT = (".asp", ".aspx", ".php", ".jsp", ".html", ".htm", ".do")
+MAX_HTML_REDIRECTS = 5
+_MAX_HTML_BYTES = 2 * 1024 * 1024
+
+_JS_REDIRECT_RE = re.compile(
+    r"(?:window\.open|window\.location|document\.location|location)"
+    r"(?:\s*\.\s*(?:href|replace|assign))?"
+    r"\s*(?:=|\()\s*['\"]([^'\"]+)['\"]",
+    re.IGNORECASE,
+)
+_META_REFRESH_RE = re.compile(
+    r"<meta[^>]+content\s*=\s*['\"][^'\"]*url\s*=\s*([^'\";\s>]+)",
+    re.IGNORECASE,
+)
+
+
+def _html_redirect_target(body: bytes, final_url: str) -> str | None:
+    """由 HTML body 抽 client-side redirect 目標，回傳絕對 URL 或 None。"""
+    text = body.decode("utf-8", errors="replace")
+    m = _JS_REDIRECT_RE.search(text) or _META_REFRESH_RE.search(text)
+    if m:
+        return urllib.parse.urljoin(final_url, m.group(1).strip())
+    return None
+
+
+def _ha_lang_retry(url: str, text: str) -> str | None:
+    """HA ha_view_content.asp：CHI 版回傳 404 頁時改試 ENG 版（同一 content_id）。"""
+    if "ha_view_content.asp" not in url:
+        return None
+    if not re.search(r"404|does not exist|not found", text, re.IGNORECASE):
+        return None
+    parts = urllib.parse.urlparse(url)
+    qs = urllib.parse.parse_qs(parts.query)
+    if (qs.get("lang") or [""])[0].upper() == "ENG":
+        return None
+    qs["lang"] = ["ENG"]
+    return urllib.parse.urlunparse(parts._replace(query=urllib.parse.urlencode(qs, doseq=True)))
+
+
+def download(url: str, dest_dir: Path, idx: int, max_bytes: int, _depth: int = 0) -> dict:
+    """下載一個 URL 到 dest_dir（stream 落 .part，成功先 os.replace，附 SHA1）。
+
+    會跟住 HTTP 3xx（urlopen 自動）同 HTML client-side redirect（JS/meta），
+    HA ha_view_content.asp 嘅 CHI 版 404 頁會改試 ENG。
+    """
+    if _depth > MAX_HTML_REDIRECTS:
+        return {"url": url, "ok": False, "error": f"redirect 超過 {MAX_HTML_REDIRECTS} 層"}
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     try:
         with urlopen(req, timeout=120) as resp:
+            final_url = resp.geturl()
+            ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            path = urllib.parse.urlparse(final_url).path.lower()
+            is_html = ct.startswith("text/html") or path.endswith(_HTML_EXT)
+            if is_html:
+                body = resp.read(_MAX_HTML_BYTES)
+                target = _html_redirect_target(body, final_url)
+                if target:
+                    return download(target, dest_dir, idx, max_bytes, _depth + 1)
+                retry = _ha_lang_retry(final_url, body.decode("utf-8", errors="replace"))
+                if retry:
+                    return download(retry, dest_dir, idx, max_bytes, _depth + 1)
+                return {"url": url, "ok": False, "error": "回應係 HTML 頁（非文件，可能需登入／JS 跳轉）"}
             name = _safe_name(_filename(url, resp, idx))
             dest = dest_dir / name
             if dest.exists():  # 同批檔名撞名 → 加 -<idx> 避免覆蓋
