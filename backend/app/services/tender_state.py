@@ -80,6 +80,7 @@ def new_entry(rec: dict, first_seen: str) -> dict:
         "tender_ref": rec.get("tender_ref", ""),
         "category": rec.get("category", ""),
         "deadline": rec.get("deadline", ""),
+        "issuer_uid": rec.get("issuer_uid", ""),
         "status": DEFAULT_STATUS,
         "status_at": first_seen,
         "issuer": "",

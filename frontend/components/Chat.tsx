@@ -15,6 +15,7 @@ type Props = {
   sessionTitle: string;
   autoMessage: string | null;
   onAutoMessageConsumed: () => void;
+  onSessionsChanged?: () => void;
 };
 
 export default function Chat({
@@ -22,6 +23,7 @@ export default function Chat({
   sessionTitle,
   autoMessage,
   onAutoMessageConsumed,
+  onSessionsChanged,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -113,6 +115,7 @@ export default function Chat({
             }
             return { ...m, items };
           });
+          if (e.node === "select_tender") onSessionsChanged?.();
         } else if (e.event === "error") {
           patchLastAssistant((m) => ({
             ...m,
@@ -143,9 +146,6 @@ export default function Chat({
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
         <div>
           <h1 className="font-semibold">{sessionTitle}</h1>
-          <p className="text-xs text-slate-500">
-            用 DeepSeek 驅動，可呼叫發現／核實／下載／消化等工具
-          </p>
         </div>
       </header>
 

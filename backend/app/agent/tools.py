@@ -53,9 +53,20 @@ def _fmt_tender(idx: int, t: dict) -> str:
 
 @tool
 def list_tenders() -> str:
-    """即時讀取 Conneciz 香港非政府招標列表（每項含 tender_id），已嚴格過濾非港機構並剔除已選取項目，俾用戶揀項目。當用戶要求「列出招標／找招標／同步」時用。"""
-    seen = {e.get("_id") for e in store.list_tenders()}  # 已選取項目，唔再重複出現
-    records = [r for r in conneciz.fetch_tenders(max_pages=5) if r.get("_id") not in seen]
+    """即時讀取 Conneciz 香港非政府招標列表（每項含 tender_id），已嚴格過濾非港機構、剔除重複及已選取項目，俾用戶揀項目。當用戶要求「列出招標／找招標／同步」時用。"""
+    selected = store.list_tenders()
+    seen_ids = {e.get("_id") for e in selected}  # 已選取項目（by id）
+    # 同一 issuer+截止日嘅 sibling 記錄都當「已選取」剔除（避免選咗其中一條，另一條仲出現）
+    seen_keys = {
+        (e.get("issuer_uid") or "", (e.get("deadline") or "")[:10])
+        for e in selected if e.get("issuer_uid")
+    }
+    records = conneciz.dedupe(conneciz.fetch_tenders(max_pages=5))
+    records = [
+        r for r in records
+        if r.get("_id") not in seen_ids
+        and (r.get("issuer_uid") or "", (r.get("deadline") or "")[:10]) not in seen_keys
+    ]
     ts = filter_hk(records, target=10)
     if not ts:
         return "無香港非政府招標。"
@@ -129,7 +140,7 @@ def read_page(url: str) -> str:
         text = reader.read(url, config.JINA_API_KEY)
     except Exception as e:  # noqa: BLE001
         return f"讀取失敗：{e}"
-    return text[:8000]
+    return text
 
 
 ALL_TOOLS = [

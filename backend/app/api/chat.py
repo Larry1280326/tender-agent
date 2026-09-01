@@ -17,9 +17,9 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _summarize(text: str, limit: int = 400) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[:limit] + "…"
+def _summarize(text: str) -> str:
+    """回傳完整 tool 輸出（除錯用，唔截斷）。"""
+    return (text or "").strip()
 
 
 @router.post("/chat/stream")
@@ -46,17 +46,15 @@ async def chat_stream(payload: ChatRequest):
             messages.append(("user", payload.message))
             sessions.touch_session(payload.thread_id)
 
+            tool_depth = 0
             async for event in agent.astream_events(
                 {"messages": messages},
                 config=config,
                 version="v2",
             ):
                 kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    content = getattr(event["data"].get("chunk"), "content", None)
-                    if isinstance(content, str) and content:
-                        yield _sse({"event": "text", "delta": content})
-                elif kind == "on_tool_start":
+                if kind == "on_tool_start":
+                    tool_depth += 1
                     name = event.get("name") or ""
                     yield _sse({"event": "tool_start", "node": name, "message": f"使用工具 {name}"})
                 elif kind == "on_tool_end":
@@ -66,6 +64,13 @@ async def chat_stream(payload: ChatRequest):
                     if not isinstance(content, str):
                         content = str(out)
                     yield _sse({"event": "tool_end", "node": name, "message": _summarize(content)})
+                    tool_depth -= 1
+                elif kind == "on_chat_model_stream":
+                    if tool_depth > 0:
+                        continue  # 工具內部嘅 LLM 呼叫，唔當用戶睇嘅文字
+                    content = getattr(event["data"].get("chunk"), "content", None)
+                    if isinstance(content, str) and content:
+                        yield _sse({"event": "text", "delta": content})
             yield _sse({"event": "done", "message": ""})
         except Exception as e:  # noqa: BLE001
             yield _sse({"event": "error", "message": f"{type(e).__name__}: {e}"})

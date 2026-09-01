@@ -35,26 +35,55 @@ def _is_junk(tender: dict) -> bool:
     return False
 
 
-def _pick_official(candidates: list[dict], issuer: str) -> dict | None:
-    """由 Serper 結果揀最似官方嘅連結（gov.hk/edu.hk 優先，conneciz 排除）。"""
+MAX_OFFICIAL_PAGES = 3
+MAX_SEARCH_QUERIES = 3
 
-    def score(r: dict) -> int:
-        link = (r.get("link") or "").lower()
-        s = 0
-        if ".gov.hk" in link:
-            s += 100
-        elif ".edu.hk" in link:
-            s += 60
-        elif ".gov." in link:
-            s += 50
-        if "conneciz" in link:
-            s -= 1000
-        return s
 
-    if not candidates:
-        return None
-    best = max(candidates, key=score)
-    return best if score(best) > 0 else None
+def _rule_queries(tender: dict, extracted: dict) -> list[str]:
+    """舊有 rule-based 關鍵字（LLM 失敗時回退）。"""
+    tender_no = extracted.get("tender_no") or tender.get("tender_ref") or ""
+    issuer = extracted.get("issuer") or ""
+    title_en = tender.get("title_en") or ""
+    title_zh = tender.get("title_zh") or ""
+    return list(dict.fromkeys([q for q in [
+        f"{tender_no} {issuer} 招標".strip(),
+        f"{tender_no} {title_en}".strip(),
+        f"{title_zh} 招標".strip(),
+    ] if q.strip()]))
+
+
+def _llm_make_queries(tender: dict, extracted: dict) -> list[str]:
+    """LLM 決定搜尋關鍵字（1..MAX_SEARCH_QUERIES 條）；失敗回退 rule-based。"""
+    try:
+        from .llm import build_model
+        model = build_model()
+        prompt = (
+            "你是香港公開招標項目分析助手。根據招標資料，設計最能搵到「官方招標通告」嘅搜尋關鍵字，"
+            f"可含招標編號／招標方／項目名稱（中英皆可），最多 {MAX_SEARCH_QUERIES} 條。只輸出 JSON：{{\"queries\": [\"...\"]}}，勿加 markdown 框。\n"
+            f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
+            f"Conneciz 詳情頁抽取：{json.dumps(extracted, ensure_ascii=False)}\n"
+        )
+        resp = model.invoke([("system", "你是香港招標分析助手，只輸出 JSON。"), ("human", prompt)])
+        content = resp.content if isinstance(resp.content, str) else str(resp.content)
+        data = json.loads(_strip_code_fences(content))
+        queries = [q.strip() for q in (data.get("queries") or []) if q and q.strip()]
+        queries = list(dict.fromkeys(queries))[:MAX_SEARCH_QUERIES]
+        return queries or _rule_queries(tender, extracted)
+    except Exception:  # noqa: BLE001
+        return _rule_queries(tender, extracted)
+
+
+def _rank_candidates(candidates: list[dict], limit: int = 10) -> list[dict]:
+    """按 Serper 排序去重（by link），無 domain 偏好。"""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in sorted(candidates, key=lambda x: x.get("position", 99)):
+        link = (r.get("link") or "").strip()
+        if not link or link in seen:
+            continue
+        seen.add(link)
+        out.append(r)
+    return out[:limit]
 
 
 def _strip_code_fences(text: str) -> str:
@@ -65,19 +94,50 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
-def _llm_judge(tender: dict, extracted: dict, official_url: str, official_text: str) -> dict:
-    """LLM 判斷地區/官方欄位；失敗時回退 regex 抽取結果。"""
+def _llm_pick_pages(tender: dict, extracted: dict, candidates: list[dict]) -> list[str]:
+    """LLM 由 Serper 候選揀要讀嘅頁（0..MAX_OFFICIAL_PAGES），取代 domain 偏好。失敗回退首位。"""
+    links = {r.get("link"): r for r in candidates if r.get("link")}
     try:
         from .llm import build_model
         model = build_model()
+        cand_lines = "\n".join(
+            f"{i}. {r.get('title') or ''} — {r.get('link')}（{r.get('snippet') or ''}）"
+            for i, r in enumerate(candidates, 1)
+        )
+        prompt = (
+            "你是香港公開招標項目分析助手。以下係 Serper 搜尋候選結果，揀出最可能係「官方招標通告」嘅頁面，"
+            f"可以揀 0–{MAX_OFFICIAL_PAGES} 個（揀多過一個係為咗互相核對）。只輸出 JSON：{{\"urls\": [\"...\"]}}，勿加 markdown 框。\n"
+            f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
+            f"Conneciz 詳情頁抽取：{json.dumps(extracted, ensure_ascii=False)}\n"
+            f"候選：\n{cand_lines}\n"
+        )
+        resp = model.invoke([("system", "你是香港招標分析助手，只輸出 JSON。"), ("human", prompt)])
+        content = resp.content if isinstance(resp.content, str) else str(resp.content)
+        data = json.loads(_strip_code_fences(content))
+        urls = [u for u in (data.get("urls") or []) if u in links]
+        return list(dict.fromkeys(urls))[:MAX_OFFICIAL_PAGES]
+    except Exception as e:  # noqa: BLE001
+        return [candidates[0]["link"]] if candidates else []
+
+
+def _llm_judge(tender: dict, extracted: dict, pages: list[dict]) -> dict:
+    """LLM 判斷地區/官方欄位（跨多頁）；失敗時回退 regex 抽取結果。"""
+    try:
+        from .llm import build_model
+        model = build_model()
+        page_lines = []
+        budget = 6000
+        per_page = max(budget // max(len(pages), 1), 500)
+        for i, p in enumerate(pages, 1):
+            page_lines.append(f"頁面 {i} URL：{p.get('url') or '(無)'}\n頁面 {i} 內容（截斷）：{(p.get('text') or '')[:per_page]}")
         prompt = (
             "你是香港公開招標項目分析助手。根據下方資料，判斷並輸出 JSON（只輸出 JSON，勿加 markdown 程式碼框）。\n"
             "JSON 鍵：region（如 HK/其他）、issuer（招標方）、tender_no（招標號碼）、deadline（截止日期）、"
-            "doc_links（文件下載連結陣列）、notes（一句話備註，可含時區/資料差異）。\n"
+            "doc_links（文件下載連結陣列）、official_url（最佳官方來源 URL，可空）、notes（一句話備註，可含時區/資料差異）。\n"
+            "注意：deadline 欄位已為香港時間 HKT（UTC+8），勿再自行加 8 小時。\n"
             f"Conneciz 原始資料：{json.dumps(tender, ensure_ascii=False)}\n"
             f"Conneciz 詳情頁抽取：{json.dumps(extracted, ensure_ascii=False)}\n"
-            f"官方頁 URL：{official_url or '(無)'}\n"
-            f"官方頁內容（截斷）：{(official_text or '')[:6000]}\n"
+            + "\n".join(page_lines) + "\n"
         )
         resp = model.invoke([("system", "你是香港招標分析助手，只輸出 JSON。"), ("human", prompt)])
         content = resp.content if isinstance(resp.content, str) else str(resp.content)
@@ -86,7 +146,7 @@ def _llm_judge(tender: dict, extracted: dict, official_url: str, official_text: 
         return {"region": "", "notes": f"LLM 判斷失敗（回退 regex）：{e}"}
 
 
-def _write_source(dossier: Path, tender: dict, extracted: dict, official: dict | None,
+def _write_source(dossier: Path, tender: dict, extracted: dict, pages: list[dict],
                   official_url: str, judgement: dict) -> None:
     lines = [
         "# 官方來源核實筆記",
@@ -97,8 +157,10 @@ def _write_source(dossier: Path, tender: dict, extracted: dict, official: dict |
         f"- 地區：{judgement.get('region') or '未判定'}",
         f"- 官方來源：{official_url or '(未找到，以 Conneciz 為準)'}",
     ]
-    if official:
-        lines += ["", "## Serper 候選", f"- {official.get('title')} — {official.get('link')}"]
+    if pages:
+        lines += ["", "## 已讀頁面"]
+        for i, p in enumerate(pages, 1):
+            lines.append(f"{i}. {p.get('title') or p.get('url')} — {p.get('url')}")
     if judgement.get("notes"):
         lines += ["", f"備註：{judgement['notes']}"]
     lines += ["", "## Conneciz 原始資料", f"```json", json.dumps(tender, ensure_ascii=False, indent=2), "```"]
@@ -118,8 +180,6 @@ def verify_node(state: dict) -> dict:
         return {"status": "searched", "logs": [_log("verify", "標題屬佔位/junk，跳過核實", "warn")]}
 
     ref = tender.get("tender_ref") or ""
-    title_en = tender.get("title_en") or ""
-    title_zh = tender.get("title_zh") or ""
     url = tender.get("url") or ""
 
     extracted: dict = {}
@@ -134,12 +194,8 @@ def verify_node(state: dict) -> dict:
     issuer = extracted.get("issuer") or ""
     tender_no = extracted.get("tender_no") or ref
 
-    # 搜尋官方來源
-    queries = list(dict.fromkeys([q for q in [
-        f"{tender_no} {issuer} 招標".strip(),
-        f"{tender_no} {title_en}".strip(),
-        f"{title_zh} 招標".strip(),
-    ] if q.strip()]))
+    # 搜尋官方來源（由 LLM 決定關鍵字）
+    queries = _llm_make_queries(tender, extracted)
     candidates: list[dict] = []
     if config.SERPER_API_KEY:
         for q in queries:
@@ -154,26 +210,39 @@ def verify_node(state: dict) -> dict:
     else:
         logs.append(_log("verify", "缺 SERPER_API_KEY，跳過官方搜尋", "warn"))
 
-    official = _pick_official(candidates, issuer)
-    official_url = official.get("link", "") if official else ""
     doc_links = list(extracted.get("doc_links") or [])
-    official_text = ""
-    if official_url and config.JINA_API_KEY:
-        logs.append(_log("verify", f"選定官方頁：{official.get('title')} — {official_url}"))
+    ranked = _rank_candidates(candidates)
+    chosen = _llm_pick_pages(tender, extracted, ranked)
+    title_by_link = {r.get("link"): r.get("title") for r in ranked}
+    pages: list[dict] = []
+    for url in chosen:
+        if not (url and config.JINA_API_KEY):
+            continue
+        logs.append(_log("verify", f"LLM 揀咗讀取：{url}"))
         try:
-            official_text = reader.read(official_url, config.JINA_API_KEY)
-            off_ext = reader.extract(official_text)
+            text = reader.read(url, config.JINA_API_KEY)
+            off_ext = reader.extract(text)
+            pages.append({
+                "url": url,
+                "title": title_by_link.get(url) or off_ext.get("title") or "",
+                "text": text,
+                "extracted": off_ext,
+            })
             doc_links = list(off_ext.get("doc_links") or doc_links)
             tender_no = off_ext.get("tender_no") or tender_no
             issuer = off_ext.get("issuer") or issuer
-            extracted.setdefault("deadline", off_ext.get("deadline"))
+            if not extracted.get("deadline"):
+                extracted["deadline"] = off_ext.get("deadline")
         except Exception as e:  # noqa: BLE001
-            logs.append(_log("verify", f"官方頁讀取失敗：{e}", "warn"))
-    else:
-        logs.append(_log("verify", "未找到官方來源，以 Conneciz 資料為準", "warn"))
+            logs.append(_log("verify", f"頁面讀取失敗：{url}：{e}", "warn"))
+    if not pages:
+        logs.append(_log("verify", "LLM 冇揀要讀嘅頁，以 Conneciz 資料為準", "warn"))
+    official_url = pages[0]["url"] if pages else ""
 
-    judgement = _llm_judge(tender, extracted, official_url, official_text)
-    _write_source(dossier, tender, extracted, official, official_url, judgement)
+    judgement = _llm_judge(tender, extracted, pages)
+    if judgement.get("official_url"):
+        official_url = judgement["official_url"]
+    _write_source(dossier, tender, extracted, pages, official_url, judgement)
     final_deadline = extracted.get("deadline") or tender.get("deadline", "")
     final_doc_links = list(dict.fromkeys(doc_links))
     set_tender_status(tid, "searched")
@@ -237,8 +306,8 @@ def _gather_docs(dossier: Path, logs: list[dict]) -> str:
                 parts.append(f.read_text(encoding="utf-8", errors="replace"))
             elif f.suffix.lower() == ".pdf":
                 try:
-                    import fitz  # PyMuPDF（可選）
-                    pdf_text = "\n".join(p.get_text() for p in fitz.open(f))
+                    import pymupdf  # PyMuPDF（可選）
+                    pdf_text = "\n".join(p.get_text() for p in pymupdf.open(f))
                     parts.append(f"[{f.name}]\n{pdf_text[:12000]}")
                 except Exception:  # noqa: BLE001
                     logs.append(_log("digest", f"PDF 文字抽取失敗（缺 PyMuPDF？）：{f.name}", "warn"))
@@ -253,6 +322,7 @@ def _llm_digest(tender: dict, state: dict, context: str) -> str:
         "你是香港公開招標項目分析助手。根據資料，用正體中文寫一份結構化項目摘要（markdown）。\n"
         "必須包含章節：基本資料（招標編號/招標方/項目名稱/截止日期/地區）、範圍摘要、提交方式、"
         "資格要求（如有）、文件下載說明（如有）、資料來源。若資料不足，據實註明「未提供」。\n"
+        "注意：deadline 欄位已為香港時間 HKT（UTC+8），直接採用即可。\n"
         f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
         f"核實欄位：{json.dumps({k: state.get(k) for k in ('issuer', 'tender_no', 'deadline', 'official_url')}, ensure_ascii=False)}\n"
         f"文件內容（截斷）：\n{(context or '')[:12000]}\n"

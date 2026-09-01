@@ -5,11 +5,12 @@ import { createSession, listSessions, Session } from "@/lib/api";
 
 type Props = {
   activeId: string | null;
+  refreshSignal: number;
   onSelect: (id: string, title: string) => void;
   onCreate: (id: string) => void;
 };
 
-export default function Sidebar({ activeId, onSelect, onCreate }: Props) {
+export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -23,7 +24,7 @@ export default function Sidebar({ activeId, onSelect, onCreate }: Props) {
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [refreshSignal]);
 
   const handleCreate = async () => {
     if (busy) return;

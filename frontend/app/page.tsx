@@ -3,16 +3,32 @@
 import { useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import Chat from "@/components/Chat";
+import { listSessions } from "@/lib/api";
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionTitle, setSessionTitle] = useState("新專案");
   const [autoMessage, setAutoMessage] = useState<string | null>(null);
+  const [refreshSignal, setRefreshSignal] = useState(0);
+
+  const handleSessionsChanged = async () => {
+    try {
+      const list = await listSessions();
+      if (sessionId) {
+        const cur = list.find((s) => s.id === sessionId);
+        if (cur) setSessionTitle(cur.title || "新專案");
+      }
+      setRefreshSignal((n) => n + 1);
+    } catch {
+      /* backend 未就緒 */
+    }
+  };
 
   return (
     <div className="flex h-screen">
       <Sidebar
         activeId={sessionId}
+        refreshSignal={refreshSignal}
         onSelect={(id, title) => {
           setSessionId(id);
           setSessionTitle(title);
@@ -30,6 +46,7 @@ export default function Home() {
           sessionTitle={sessionTitle}
           autoMessage={autoMessage}
           onAutoMessageConsumed={() => setAutoMessage(null)}
+          onSessionsChanged={handleSessionsChanged}
         />
       </div>
     </div>

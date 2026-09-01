@@ -31,6 +31,25 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+HKT = timezone(timedelta(hours=8))
+
+
+def to_hkt(iso: str) -> str:
+    """Conneciz ClosingDateTime 係 UTC，轉做 HKT（UTC+8）ISO 字串；解析唔到就回傳原字串。"""
+    if not iso:
+        return iso
+    try:
+        s = iso.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(HKT).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+08:00"
+    except ValueError:
+        return iso
+
+
 def fetch_page(
     since: str | None,
     limit: int = PAGE_SIZE,
@@ -127,9 +146,33 @@ def slim(rec: dict) -> dict:
         "category": rec.get("Tender Category") or "",
         "created": rec.get("Created Date") or "",
         "modified": rec.get("Modified Date") or "",
-        "deadline": rec.get("ClosingDateTime") or "",
+        "deadline": to_hkt(rec.get("ClosingDateTime") or ""),
+        "issuer_uid": rec.get("Company_UID") or "",
         "url": f"https://conneciz.app/view-tender/{slug}" if slug else "",
     }
+
+
+def dedupe(records: list[dict]) -> list[dict]:
+    """去除重複記錄：同一 issuer（Company_UID）+ 同一截止日，只保留第一條。
+
+    Conneciz 會為同一個招標出多條唔同 _id 嘅記錄（標題甚至略有差異），
+    用 issuer+deadline 做穩定 key 去重，避免列表重複。
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for r in records:
+        issuer = r.get("issuer_uid") or ""
+        deadline = (r.get("deadline") or "")[:10]
+        if issuer:
+            key = f"uid|{issuer}|{deadline}"
+        else:
+            title = (r.get("title_en") or r.get("title_zh") or "").strip().lower()
+            key = f"title|{title}|{deadline}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
 
 
 def fetch_tenders(
