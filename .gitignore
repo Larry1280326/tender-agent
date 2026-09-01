@@ -1,5 +1,11 @@
-dossiers/
-pipeline_state.json
 __pycache__/
 .DS_Store
 .env
+
+# web app
+backend/.env
+backend/data/
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+*.tsbuildinfo

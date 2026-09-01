@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-"""共用工具：.env 讀取、SSL fallback urlopen、UA。供 serper.py / reader.py 共用。"""
+"""共用工具：SSL fallback urlopen、UA、資料根目錄。供 services 內各模組共用。"""
 from __future__ import annotations
 
 import os
@@ -7,33 +6,22 @@ import ssl
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-ENV_FILE = ROOT / ".env"
+# backend/ 根目錄（此檔喺 backend/app/services/common.py）
+ROOT = Path(__file__).resolve().parent.parent.parent
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 tender-pipeline"
 
-# SSL 證書：預設 context 失敗時退回 macOS 系統根證書（同 discover.py）
+
+def data_root() -> Path:
+    """資料根目錄：TENDER_DATA_DIR 環境變數優先，否則 backend/data。"""
+    env = os.environ.get("TENDER_DATA_DIR")
+    return Path(env).resolve() if env else (ROOT / "data")
+
+
+# SSL 證書：預設 context 失敗時退回 macOS 系統根證書
 _SSL_CONTEXTS = [ssl.create_default_context()]
 for _cafile in ("/etc/ssl/cert.pem",):
     if Path(_cafile).exists():
         _SSL_CONTEXTS.append(ssl.create_default_context(cafile=_cafile))
-
-
-def load_env() -> dict[str, str]:
-    """讀 .env（KEY=VALUE，支援 # 註解、引號）。"""
-    env: dict[str, str] = {}
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    return env
-
-
-def get_key(name: str) -> str:
-    """shell 環境變數優先，其次 .env。"""
-    return os.environ.get(name) or load_env().get(name, "")
 
 
 def urlopen(req: urllib.request.Request, timeout: int = 60):

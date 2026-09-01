@@ -1,22 +1,10 @@
-#!/usr/bin/env python3
-"""Jina Reader 讀頁：agent 叫嚟攞網頁內容（markdown），或抽取招標關鍵欄位。
-
-用法:
-    python3 scripts/reader.py --url <URL>              # 輸出整頁 markdown 內容
-    python3 scripts/reader.py --url <URL> --extract    # 抽取招標方/招標號碼/截止日期等（JSON）
-
-抽取欄位（Conneciz 詳情頁 + 官方通告頁通用，best-effort）:
-    title（項目名稱）、issuer（招標方）、tender_no（招標號碼）、deadline（截止日期）、doc_links（文件連結）
-"""
+"""Jina Reader 讀頁：agent 叫嚟攞網頁內容（markdown），或抽取招標關鍵欄位。"""
 from __future__ import annotations
 
-import argparse
-import json
 import re
-import sys
 import urllib.request
 
-from common import UA, get_key, urlopen
+from .common import UA, urlopen
 
 JINA_READER = "https://r.jina.ai/"
 
@@ -82,30 +70,3 @@ def extract(text: str) -> dict:
         "deadline": deadline,
         "doc_links": list(dict.fromkeys(_RE_DOC.findall(text)))[:20],
     }
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Jina Reader 讀頁")
-    ap.add_argument("--url", required=True, help="要讀嘅 URL")
-    ap.add_argument("--extract", action="store_true", help="抽取招標欄位（JSON）而非輸出全文")
-    ap.add_argument("--max-chars", type=int, default=0, help="全文截斷字數（0 = 唔截）")
-    args = ap.parse_args()
-
-    key = get_key("JINA_API_KEY")
-    if not key:
-        print("缺 JINA_API_KEY（放 .env）", file=sys.stderr)
-        return 1
-
-    text = read(args.url, key)
-
-    if args.extract:
-        print(json.dumps({"url": args.url, "chars": len(text), **extract(text)},
-                         ensure_ascii=False, indent=2))
-    else:
-        out = text if args.max_chars <= 0 else text[: args.max_chars]
-        print(out)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
