@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getMessages, Message, streamChat, uploadFile } from "@/lib/api";
+import { getMessages, Message, resumeChat, streamChat, uploadFile } from "@/lib/api";
 import Markdown from "@/components/Markdown";
 
 const EXAMPLES = [
@@ -34,6 +34,11 @@ export default function Chat({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<{
+    to?: string;
+    subject?: string;
+    body?: string;
+  } | null>(null);
 
   // 載入 session 歷史（新 session 喺歷史載入後先自動發訊，避免 race）
   useEffect(() => {
@@ -144,6 +149,59 @@ export default function Chat({
             return { ...m, items, markdown: e.markdown || m.markdown };
           });
           if (e.node === "select_tender") onSessionsChanged?.();
+        } else if (e.event === "approval_required") {
+          setPendingApproval(e.payload || null);
+        } else if (e.event === "error") {
+          patchLastAssistant((m) => ({
+            ...m,
+            items: [...m.items, { type: "text", text: `⚠️ ${e.message}` }],
+          }));
+        }
+      });
+    } catch (err) {
+      patchLastAssistant((m) => ({
+        ...m,
+        items: [...m.items, { type: "text", text: `⚠️ ${String(err)}` }],
+      }));
+    } finally {
+      runningRef.current = false;
+      setRunning(false);
+    }
+  };
+
+  const resume = async (approved: boolean) => {
+    if (runningRef.current || !sessionId) return;
+    setPendingApproval(null);
+    runningRef.current = true;
+    setRunning(true);
+    try {
+      await resumeChat(sessionId, approved, (e) => {
+        if (e.event === "text" && e.delta) {
+          patchLastAssistant((m) => {
+            const items = m.items.slice();
+            const last = items[items.length - 1];
+            if (last && last.type === "text") {
+              items[items.length - 1] = { ...last, text: last.text + e.delta! };
+            } else {
+              items.push({ type: "text", text: e.delta! });
+            }
+            return { ...m, items };
+          });
+        } else if (e.event === "tool_end") {
+          // resume 時會重複發 tool_start，忽略；只將待核准嘅 tool card 標做完成。
+          patchLastAssistant((m) => {
+            const items = m.items.slice();
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
+              if (it.type === "tool" && !it.done) {
+                items[i] = { ...it, done: true, result: e.message };
+                break;
+              }
+            }
+            return { ...m, items, markdown: e.markdown || m.markdown };
+          });
+        } else if (e.event === "approval_required") {
+          setPendingApproval(e.payload || null);
         } else if (e.event === "error") {
           patchLastAssistant((m) => ({
             ...m,
@@ -259,6 +317,45 @@ export default function Chat({
             </div>
           </div>
         ))}
+        {pendingApproval && (
+          <div className="flex justify-start">
+            <div className="w-full max-w-[85%] space-y-2 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+              <div className="font-medium text-amber-800">確認發送電郵？</div>
+              <div className="space-y-1 text-sm text-slate-700">
+                <p>
+                  <span className="font-medium">收件人：</span>
+                  {pendingApproval.to}
+                </p>
+                <p>
+                  <span className="font-medium">主旨：</span>
+                  {pendingApproval.subject}
+                </p>
+                <div>
+                  <span className="font-medium">內容：</span>
+                  <pre className="mt-1 whitespace-pre-wrap rounded bg-white p-2 text-xs text-slate-600">
+                    {pendingApproval.body}
+                  </pre>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => void resume(true)}
+                  disabled={running}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  確認發送
+                </button>
+                <button
+                  onClick={() => void resume(false)}
+                  disabled={running}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -302,12 +399,12 @@ export default function Chat({
                 ? "問佢搵招標、核實、生成摘要…（Enter 送出）"
                 : "請先建立或選擇一個專案"
             }
-            disabled={!sessionId}
+            disabled={!sessionId || !!pendingApproval}
             className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50"
           />
           <button
             onClick={() => void send(input)}
-            disabled={running || (!input.trim() && !file) || !sessionId}
+            disabled={running || !!pendingApproval || (!input.trim() && !file) || !sessionId}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {running ? "處理中…" : "送出"}

@@ -22,6 +22,11 @@ class ChatRequest(BaseModel):
     message: str = ""
 
 
+class ApproveRequest(BaseModel):
+    thread_id: str = "default"
+    approved: bool
+
+
 class UploadResponse(BaseModel):
     path: str
     filename: str

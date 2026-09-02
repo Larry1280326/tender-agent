@@ -5,6 +5,7 @@ backend 內嘅版本：冇 CLI，只提供函數。每次「發現」都係即�
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
 import re
@@ -31,6 +32,14 @@ _SSL_CONTEXTS = [ssl.create_default_context()]
 for _cafile in ("/etc/ssl/cert.pem",):
     if Path(_cafile).exists():
         _SSL_CONTEXTS.append(ssl.create_default_context(cafile=_cafile))
+
+# 可重試嘅暫時性讀取錯誤：連線中途被截斷／reset（Conneciz/Bubble 偶發截斷大型回應）。
+_RETRYABLE = (
+    http.client.IncompleteRead,
+    http.client.RemoteDisconnected,
+    ConnectionResetError,
+    TimeoutError,
+)
 
 
 def now_iso() -> str:
@@ -86,20 +95,29 @@ def fetch_page(
         params["constraints"] = json.dumps(constraints, ensure_ascii=False)
     url = f"{API}?{urllib.parse.urlencode(params, quote_via=urllib.parse.quote)}"
     last_err = None
-    for ctx in _SSL_CONTEXTS:
-        try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": UA, "Accept": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-            return body.get("response", {}).get("results") or []
-        except urllib.error.URLError as e:
-            if isinstance(e.reason, ssl.SSLCertVerificationError):
-                last_err = e.reason
-                continue
-            raise
-    raise last_err  # type: ignore[misc]
+    for attempt in range(3):
+        retryable = None
+        for ctx in _SSL_CONTEXTS:
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": UA, "Accept": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                return body.get("response", {}).get("results") or []
+            except urllib.error.URLError as e:
+                if isinstance(e.reason, ssl.SSLCertVerificationError):
+                    last_err = e.reason
+                    continue
+                raise
+            except _RETRYABLE as e:
+                retryable = e
+                break  # 換 SSL context 冇幫助，直接重試成個 request
+        if retryable is not None:
+            time.sleep(0.5 * (attempt + 1))
+            continue
+        raise last_err  # type: ignore[misc]
+    raise retryable  # type: ignore[misc]
 
 
 def iter_since(

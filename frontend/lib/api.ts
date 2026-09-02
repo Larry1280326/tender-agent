@@ -19,6 +19,8 @@ export type ChatEvent = {
   node?: string;
   message?: string;
   markdown?: string;
+  interrupt_id?: string;
+  payload?: { to?: string; subject?: string; body?: string };
 };
 
 async function json<T>(res: Response): Promise<T> {
@@ -66,16 +68,7 @@ export async function uploadFile(
   return json(await fetch(`${API_URL}/upload`, { method: "POST", body: fd }));
 }
 
-export async function streamChat(
-  threadId: string,
-  message: string,
-  onEvent: (e: ChatEvent) => void,
-): Promise<void> {
-  const res = await fetch(`${API_URL}/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ thread_id: threadId, message }),
-  });
+async function consumeSSE(res: Response, onEvent: (e: ChatEvent) => void): Promise<void> {
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status}`);
   }
@@ -101,4 +94,30 @@ export async function streamChat(
       }
     }
   }
+}
+
+export async function streamChat(
+  threadId: string,
+  message: string,
+  onEvent: (e: ChatEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId, message }),
+  });
+  await consumeSSE(res, onEvent);
+}
+
+export async function resumeChat(
+  threadId: string,
+  approved: boolean,
+  onEvent: (e: ChatEvent) => void,
+): Promise<void> {
+  const res = await fetch(`${API_URL}/chat/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId, approved }),
+  });
+  await consumeSSE(res, onEvent);
 }

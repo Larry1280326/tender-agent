@@ -10,10 +10,11 @@ from typing import Annotated
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg, tool
+from langgraph.types import interrupt
 
 from .. import sessions, store
 from ..classify import filter_hk
-from ..services import common, conneciz, file_reader, tender_state, utils
+from ..services import common, conneciz, emailer, file_reader, tender_state, utils
 from .pipeline import get_pipeline
 from .web_tools import read_page, search_web
 
@@ -97,7 +98,10 @@ def list_tenders(page: int = 1) -> str:
         (e.get("issuer_uid") or "", (e.get("deadline") or "")[:10])
         for e in selected if e.get("issuer_uid")
     }
-    records = conneciz.dedupe(_list_candidates())
+    try:
+        records = conneciz.dedupe(_list_candidates())
+    except Exception as e:  # noqa: BLE001
+        return f"暫時讀取唔到 Conneciz 招標列表（{e}），請稍後再試。"
     print(len(records))
     records = [
         r for r in records
@@ -169,6 +173,18 @@ READ_LIMIT = 20000
 
 
 @tool
+def send_email(to: str, subject: str, body: str) -> str:
+    """發送電郵。寄出前會先請用戶確認收件人／主旨／內容，用戶批准後先真正寄出。to 可用逗號分隔多個收件人。"""
+    decision = interrupt({"type": "send_email_approval", "to": to, "subject": subject, "body": body})
+    if not isinstance(decision, dict) or not decision.get("approved"):
+        return "用戶已取消，電郵未發送。"
+    try:
+        return emailer.send_email(to, subject, body)
+    except Exception as e:  # noqa: BLE001
+        return f"發送失敗：{e}"
+
+
+@tool
 def read_file(path: str) -> str:
     """讀取本地檔案（已上傳／已下載）嘅文字內容。path 係 /upload 回傳嘅路徑（相對 data/ 目錄）或 dossier docs/ 內檔案，支援 pdf/docx/xlsx/doc/xls/txt/csv。當用戶話「上傳咗檔案」並俾咗路徑、或要讀已下載嘅文件時用。"""
     p = Path(path)
@@ -202,4 +218,5 @@ ALL_TOOLS = [
     read_page,
     download_file,
     read_file,
+    send_email,
 ]

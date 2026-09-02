@@ -134,7 +134,7 @@ def filter_non_gov(records: list[dict], deep_check: bool = False) -> list[dict]:
     return out
 
 
-_DEEP_WORKERS = 8
+_DEEP_WORKERS = 16
 
 
 # 「招標方:」…「發佈日期:」之間即係 issuer（Conneciz 詳情頁）

@@ -21,6 +21,8 @@ DEEPSEEK_BASE_URL = _get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = _get("DEEPSEEK_MODEL", "deepseek-chat")
 SERPER_API_KEY = _get("SERPER_API_KEY")
 JINA_API_KEY = _get("JINA_API_KEY")
+GMAIL_USER = _get("GMAIL_USER")
+GMAIL_APP_PASSWORD = _get("GMAIL_APP_PASSWORD")
 
 # 資料夾（web app 專用）：招標狀態、dossiers、session、checkpoint 都放呢度
 DATA_DIR = Path(_get("TENDER_DATA_DIR", str(BACKEND_ROOT / "data"))).resolve()
