@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from .. import sessions, store
 from ..agent.agent import get_agent
 from ..schemas import SessionCreate, SessionUpdate
+from ..services.common import parse_markdown_result
 
 router = APIRouter()
 
@@ -88,7 +89,10 @@ def _reconstruct(messages) -> list[dict]:
                     for j in range(len(out[i]["items"]) - 1, -1, -1):
                         item = out[i]["items"][j]
                         if item["type"] == "tool" and "result" not in item:
-                            item["result"] = _extract_text(m.content)
+                            summary, markdown = parse_markdown_result(_extract_text(m.content))
+                            item["result"] = summary
+                            if markdown:
+                                item["markdown"] = markdown
                             break
                     break
         # SystemMessage 忽略

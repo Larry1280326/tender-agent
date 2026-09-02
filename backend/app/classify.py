@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 # 政府部門關鍵字（正體中文 + 英文）。故意唔包含法定機構（醫院管理局、大學、房委會等）。
 # 避免用單字「署/處/局/司」做 keyword（非政府機構名都常含「辦事處/秘書處」）。
 GOV_ZH = (
-    "政府", "部門", "懲教署", "水務署", "屋宇署", "建築署", "衞生署", "衛生署",
+    "政府", "部門", "懲教署", "水務署", "屋宇署", "建築署", "衞生署",
     "入境事務處", "海關", "警務處", "消防處", "庫務署", "政府物流服務署", "地政總署",
     "渠務署", "路政署", "機電工程署", "海事處", "民航處", "天文台", "稅務局",
     "差餉物業估價署", "土地註冊處", "政府統計處", "政府產業署", "教育局", "勞工處",
@@ -40,22 +41,7 @@ GOV_EN = (
 
 # 外國／非香港訊號
 FOREIGN_ZH = ("新加坡", "台灣", "新北市", "臺北", "臺北市", "內地", "中國內地", "廣州", "深圳", "上海", "北京")
-FOREIGN_EN = ("singapore", "taiwan", "mainland china", "new taipei", "mas building", "hdb")
-
-# 非港機構關鍵字（用喺 issuer／全文過濾）。刻意唔落短縮寫（hdb/lta/ura），
-# 以免 substring 誤傷「rural/natural」等字。
-FOREIGN_ISSUER_ZH = (
-    "新加坡", "馬來西亞", "台灣", "臺灣", "臺北", "新北市", "內地", "中國內地",
-    "澳门", "澳門", "泰國", "越南", "印尼", "菲律賓", "日本", "韓國", "澳洲",
-    "新西蘭", "紐西蘭", "印度", "國務院",
-)
-FOREIGN_ISSUER_EN = (
-    "ministry of", "singapore", "malaysia", "taiwan", "mainland china",
-    "macau", "macao", "thailand", "vietnam", "indonesia", "philippines",
-    "japan", "korea", "australia", "new zealand", "india",
-    "kementerian", "jabatan", "temasek", "mindef", "imda", "govtech",
-)
-
+FOREIGN_EN = ("singapore", "taiwan", "mainland china", "new taipei", "mas building", "hdb", "ministry of")
 
 def is_hk(rec: dict) -> bool:
     text = ((rec.get("title_zh") or "") + " " + (rec.get("title_en") or "") + " " + (rec.get("url") or "")).lower()
@@ -80,18 +66,6 @@ def is_gov(rec: dict) -> bool:
             return True
     for kw in GOV_EN:
         if kw in te or kw in rec.get("issuer", ""):
-            return True
-    return False
-
-
-def _is_foreign_issuer(text: str) -> bool:
-    """issuer／全文 是否屬非港機構（關鍵字 substring）。"""
-    t = (text or "").lower()
-    for kw in FOREIGN_ISSUER_ZH:
-        if kw in t:
-            return True
-    for kw in FOREIGN_ISSUER_EN:
-        if kw in t:
             return True
     return False
 
@@ -163,18 +137,50 @@ def filter_non_gov(records: list[dict], deep_check: bool = False) -> list[dict]:
 _DEEP_WORKERS = 8
 
 
-def _deep_keep(rec: dict) -> tuple[bool, str]:
-    """深度檢查單項：讀詳情頁抽 issuer（冇 issuer 就全文），判斷係咪非港機構。
+# 「招標方:」…「發佈日期:」之間即係 issuer（Conneciz 詳情頁）
+_RE_ISSUER_BETWEEN = re.compile(
+    r"招標方\s*[:：]?\s*(.+?)\s*(?:發佈日期|發布日期)\s*[:：]?",
+    re.DOTALL,
+)
 
+
+def _extract_issuer(text: str) -> str:
+    """抽出「招標方:」與「發佈日期:」之間的文字做 issuer。"""
+    m = _RE_ISSUER_BETWEEN.search(text or "")
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", m.group(1)).strip(" \t:：.、,，")
+
+
+def _is_foreign_or_gov_issuer(issuer: str) -> bool:
+    """issuer 屬非港（FOREIGN_ZH/EN）或政府（GOV_ZH/EN）即 True。"""
+    t = (issuer or "").lower()
+    for kw in FOREIGN_ZH:
+        if kw in t:
+            return True
+    for kw in FOREIGN_EN:
+        if kw in t:
+            return True
+    for kw in GOV_ZH:
+        if kw in t:
+            return True
+    for kw in GOV_EN:
+        if kw in t:
+            return True
+    return False
+
+
+def _deep_keep(rec: dict) -> tuple[bool, str]:
+    """深度檢查單項：讀詳情頁，抽「招標方:…發佈日期:」間 issuer。
+
+    issuer 抽唔到（「招標方:」空）或屬非港／政府即剔。
     回傳 (保留, issuer)。俾 filter_hk 用嚟並行跑。
     """
     text = _read_detail(rec)
-    issuer = (reader.extract(text).get("issuer") or "").strip() if text else ""
-    haystack = issuer or text  # issuer 優先，冇先掃全文
-    keep = not (haystack and _is_foreign_issuer(haystack))
-    if keep and issuer and is_gov({"title_zh": issuer, "title_en": issuer, "url": ""}):
-        keep = False
-    return keep, issuer
+    issuer = _extract_issuer(text) if text else ""
+    if not issuer:
+        return False, ""
+    return (not _is_foreign_or_gov_issuer(issuer), issuer)
 
 
 def filter_hk(records: list[dict], target: int = 10, max_checks: int = 40) -> list[dict]:

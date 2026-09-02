@@ -10,9 +10,11 @@ from typing import Annotated
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolArg, tool
 
-from .. import config, nodes, sessions, store
+from .. import sessions, store
 from ..classify import filter_hk
-from ..services import conneciz, reader, serper, tender_state
+from ..services import common, conneciz, tender_state
+from .pipeline import get_pipeline
+from .web_tools import read_page, search_web
 
 
 def _build_state(tender_id: str) -> dict:
@@ -66,7 +68,9 @@ def list_tenders() -> str:
         (e.get("issuer_uid") or "", (e.get("deadline") or "")[:10])
         for e in selected if e.get("issuer_uid")
     }
-    records = conneciz.dedupe(conneciz.fetch_tenders(max_pages=5))
+    records = conneciz.dedupe(
+        conneciz.fetch_tenders(max_pages=5, min_days_ahead=2, max_days_ahead=60)  # 2 天至 2 個月
+    )
     print(*records)
     print()
     print()
@@ -96,68 +100,23 @@ def select_tender(tender_id: str, config: Annotated[RunnableConfig, InjectedTool
     title = tender.get("title_zh") or tender.get("title_en") or tender_id
     if thread_id:
         sessions.bind_tender(thread_id, tender_id, title)
-    return f"已選取：{title}（tender_id={tender_id}）。之後核實／下載／摘要都對住佢。"
+    return f"已選取：{title}（tender_id={tender_id}）。之後核實／摘要都對住佢。"
 
 
 @tool
-def verify_tender(tender_id: str) -> str:
-    """核實指定招標（用 tender_id）：搜尋官方來源、抽取招標方/編號/截止、寫入 00_source.md。"""
+def process_tender(tender_id: str) -> str:
+    """核實指定招標並生成摘要（verify → digest）：先核實官方來源，再由 digest 子代理（可搜尋/讀頁）生成 01_digest.md。"""
     tender = store.get_tender(tender_id)
     if tender is None:
         return f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
-    return _format_node_result("核實", nodes.verify_node(_build_state(tender_id)))
-
-
-@tool
-def download_docs(tender_id: str) -> str:
-    """下載指定招標嘅文件到 dossiers/<id>/docs/。"""
-    tender = store.get_tender(tender_id)
-    if tender is None:
-        return f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
-    return _format_node_result("下載文件", nodes.download_node(_build_state(tender_id)))
-
-
-@tool
-def digest_tender(tender_id: str) -> str:
-    """消化指定招標文件，生成 01_digest.md（項目摘要）。"""
-    tender = store.get_tender(tender_id)
-    if tender is None:
-        return f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
-    return _format_node_result("消化", nodes.digest_node(_build_state(tender_id)))
-
-
-@tool
-def search_web(query: str) -> str:
-    """用 Serper 搜尋官方招標通告（回傳標題＋連結＋摘要）。"""
-    if not config.SERPER_API_KEY:
-        return "缺 SERPER_API_KEY（放 backend/.env）。"
-    try:
-        res = serper.search(query, config.SERPER_API_KEY, num=10)
-    except Exception as e:  # noqa: BLE001
-        return f"搜尋失敗：{e}"
-    if not res:
-        return "無搜尋結果。"
-    return "\n".join(f"- {r['title']} — {r['link']}" for r in res)
-
-
-@tool
-def read_page(url: str) -> str:
-    """用 Jina Reader 讀取網頁內容（markdown），可用嚟查官方通告詳情。"""
-    if not config.JINA_API_KEY:
-        return "缺 JINA_API_KEY（放 backend/.env）。"
-    try:
-        text = reader.read(url, config.JINA_API_KEY)
-    except Exception as e:  # noqa: BLE001
-        return f"讀取失敗：{e}"
-    return text
+    result = get_pipeline().invoke(_build_state(tender_id))
+    return common.markdown_result(_format_node_result("核實＋消化", result), result.get("digest_md"))
 
 
 ALL_TOOLS = [
     list_tenders,
     select_tender,
-    verify_tender,
-    download_docs,
-    digest_tender,
+    process_tender,
     search_web,
     read_page,
 ]

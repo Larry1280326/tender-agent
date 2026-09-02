@@ -1,6 +1,7 @@
 """共用工具：SSL fallback urlopen、UA、資料根目錄。供 services 內各模組共用。"""
 from __future__ import annotations
 
+import json
 import os
 import ssl
 import time
@@ -65,3 +66,21 @@ class TTLCache:
         if len(self._data) > self.maxsize:
             oldest = next(iter(self._data))
             self._data.pop(oldest, None)
+
+
+def markdown_result(summary: str, markdown: str | None) -> str:
+    """tool 回傳：summary 俾 LLM 睇，markdown 俾 frontend 渲染。"""
+    if not markdown:
+        return summary
+    return json.dumps({"summary": summary, "markdown": markdown}, ensure_ascii=False)
+
+
+def parse_markdown_result(text: str) -> tuple[str, str | None]:
+    """反解 markdown_result；非 JSON 就原樣回傳 (text, None)。"""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and "markdown" in data:
+            return data.get("summary") or "", data.get("markdown") or None
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return (text or "").strip() if isinstance(text, str) else str(text), None

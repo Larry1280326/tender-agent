@@ -109,7 +109,7 @@ export default function Chat({
             for (let i = items.length - 1; i >= 0; i--) {
               const it = items[i];
               if (it.type === "tool" && !it.done) {
-                items[i] = { ...it, done: true, result: e.message };
+                items[i] = { ...it, done: true, result: e.message, markdown: e.markdown };
                 break;
               }
             }
@@ -213,6 +213,16 @@ export default function Chat({
                         {item.result}
                       </p>
                     )}
+                    {item.done && item.markdown && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
+                          查看 Markdown 內容
+                        </summary>
+                        <div className="prose prose-sm max-w-none mt-2 rounded-md bg-white p-3 text-slate-700">
+                          <Markdown content={item.markdown} />
+                        </div>
+                      </details>
+                    )}
                   </div>
                 ),
               )}
@@ -232,7 +242,7 @@ export default function Chat({
             rows={1}
             placeholder={
               sessionId
-                ? "問佢搵招標、核實、下載、生成摘要…（Enter 送出）"
+                ? "問佢搵招標、核實、生成摘要…（Enter 送出）"
                 : "請先建立或選擇一個專案"
             }
             disabled={!sessionId}

@@ -9,17 +9,13 @@ from fastapi.responses import StreamingResponse
 from .. import sessions
 from ..agent.agent import get_agent
 from ..schemas import ChatRequest
+from ..services.common import parse_markdown_result
 
 router = APIRouter()
 
 
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def _summarize(text: str) -> str:
-    """回傳完整 tool 輸出（除錯用，唔截斷）。"""
-    return (text or "").strip()
 
 
 @router.post("/chat/stream")
@@ -63,7 +59,8 @@ async def chat_stream(payload: ChatRequest):
                     content = getattr(out, "content", out)
                     if not isinstance(content, str):
                         content = str(out)
-                    yield _sse({"event": "tool_end", "node": name, "message": _summarize(content)})
+                    summary, markdown = parse_markdown_result(content)
+                    yield _sse({"event": "tool_end", "node": name, "message": summary, "markdown": markdown})
                     tool_depth -= 1
                 elif kind == "on_chat_model_stream":
                     if tool_depth > 0:

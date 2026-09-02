@@ -1,6 +1,7 @@
-"""Per-tender 節點邏輯：verify → download → digest。
+"""Per-tender 節點邏輯：verify → digest。
 
-沿用 services 做所有 fetching（reader/serper/utils/conneciz）；LLM 只做判斷同生成。
+沿用 services 做所有 fetching（reader/serper）；LLM 只做判斷同生成。
+digest 係 agentic node：開一個子代理（search_web/read_page）補官方資料再生成 01_digest.md。
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import config
-from .services import reader, serper, utils
+from .services import reader, serper
 from .store import set_tender_status, update_tender
 
 # 佔位/junk 標題清單（數據品質過濾）
@@ -148,7 +149,7 @@ def _llm_judge(tender: dict, extracted: dict, pages: list[dict]) -> dict:
 
 
 def _write_source(dossier: Path, tender: dict, extracted: dict, pages: list[dict],
-                  official_url: str, judgement: dict) -> None:
+                  official_url: str, judgement: dict) -> str:
     lines = [
         "# 官方來源核實筆記",
         "",
@@ -165,7 +166,9 @@ def _write_source(dossier: Path, tender: dict, extracted: dict, pages: list[dict
     if judgement.get("notes"):
         lines += ["", f"備註：{judgement['notes']}"]
     lines += ["", "## Conneciz 原始資料", f"```json", json.dumps(tender, ensure_ascii=False, indent=2), "```"]
-    (dossier / "00_source.md").write_text("\n".join(lines), encoding="utf-8")
+    text = "\n".join(lines)
+    (dossier / "00_source.md").write_text(text, encoding="utf-8")
+    return text
 
 
 def verify_node(state: dict) -> dict:
@@ -269,7 +272,7 @@ def verify_node(state: dict) -> dict:
     judgement = _llm_judge(tender, extracted, pages)
     if judgement.get("official_url"):
         official_url = judgement["official_url"]
-    _write_source(dossier, tender, extracted, pages, official_url, judgement)
+    source_md = _write_source(dossier, tender, extracted, pages, official_url, judgement)
     final_deadline = extracted.get("deadline") or tender.get("deadline", "")
     final_doc_links = list(dict.fromkeys(doc_links))
     set_tender_status(tid, "searched")
@@ -290,57 +293,9 @@ def verify_node(state: dict) -> dict:
         "deadline": final_deadline,
         "official_url": official_url,
         "doc_links": final_doc_links,
+        "source_md": source_md,
         "logs": logs,
     }
-
-
-def download_node(state: dict) -> dict:
-    logs: list[dict] = []
-    tid = state["tender_id"]
-    dossier = Path(state["dossier_dir"])
-    links = [l for l in (state.get("doc_links") or []) if isinstance(l, str) and l.startswith("http")]
-
-    if not links:
-        set_tender_status(tid, "searched")
-        return {"logs": [_log("download", "無直接下載連結（可能需登入／線下索取，留待用戶處理）", "warn")]}
-
-    dest_dir = dossier / "docs"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    max_bytes = 100 * 1024 * 1024
-    results = [utils.download(u, dest_dir, i, max_bytes) for i, u in enumerate(links, 1)]
-    for r in results:
-        if r.get("ok"):
-            logs.append(_log("download", f"下載 {r['file']}（{r['size']} bytes）"))
-        else:
-            logs.append(_log("download", f"下載失敗 {r['url']}：{r.get('error')}", "error"))
-
-    downloaded = sum(1 for r in results if r.get("ok"))
-    set_tender_status(tid, "downloaded")
-    logs.append(_log("download", f"文件取得完成：{downloaded}/{len(links)}"))
-    return {"status": "downloaded", "logs": logs}
-
-
-def _gather_docs(dossier: Path, logs: list[dict]) -> str:
-    """收集 dossier 內文字（00_source.md + *.md/*.txt + PDF 文字抽取，PDF 用 PyMuPDF 若可用）。"""
-    parts: list[str] = []
-    source = dossier / "00_source.md"
-    if source.exists():
-        parts.append(source.read_text(encoding="utf-8"))
-    docs = dossier / "docs"
-    if docs.exists():
-        for f in sorted(docs.iterdir()):
-            if f.suffix.lower() in (".md", ".txt"):
-                parts.append(f.read_text(encoding="utf-8", errors="replace"))
-            elif f.suffix.lower() == ".pdf":
-                try:
-                    import pymupdf  # PyMuPDF（可選）
-                    pdf_text = "\n".join(p.get_text() for p in pymupdf.open(f))
-                    parts.append(f"[{f.name}]\n{pdf_text[:12000]}")
-                except Exception:  # noqa: BLE001
-                    logs.append(_log("digest", f"PDF 文字抽取失敗（缺 PyMuPDF？）：{f.name}", "warn"))
-            else:
-                logs.append(_log("digest", f"略過非文字檔：{f.name}", "warn"))
-    return "\n\n".join(parts)
 
 
 def _llm_digest(tender: dict, state: dict, context: str) -> str:
@@ -372,15 +327,89 @@ def _llm_digest(tender: dict, state: dict, context: str) -> str:
         )
 
 
+DIGEST_AGENT_PROMPT = (
+    "你是香港公開招標項目分析助手。你會收到招標資料、核實欄位同核實筆記。\n"
+    "你可以 call search_web / read_page 去補充官方招標通告內容（如有需要）。\n"
+    "最後用正體中文寫一份結構化項目摘要（markdown），直接輸出 markdown，勿加任何前後說明或程式碼框。\n"
+    "必須包含章節：基本資料（招標編號/招標方/項目名稱/截止日期/地區）、範圍摘要、提交方式、"
+    "資格要求（如有）、文件下載說明（如有）、資料來源。若資料不足，據實註明「未提供」。\n"
+    "注意：deadline 欄位已為香港時間 HKT（UTC+8），直接採用即可。\n"
+)
+
+_digest_agent = None
+
+
+def _get_digest_agent():
+    """digest 子代理（可 call search_web/read_page）；lazy 建立，無 checkpointer。"""
+    global _digest_agent
+    if _digest_agent is None:
+        from langgraph.prebuilt import create_react_agent
+
+        from .agent.web_tools import read_page, search_web
+        from .llm import build_model
+
+        _digest_agent = create_react_agent(
+            build_model(), [search_web, read_page], prompt=DIGEST_AGENT_PROMPT
+        )
+    return _digest_agent
+
+
+def _extract_text(content) -> str:
+    """由 AIMessage content（str / list of blocks）抽純文字。"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _final_answer(messages) -> str:
+    """攞 ReAct 子代理最後一個有文字嘅 AIMessage。"""
+    for m in reversed(messages):
+        if type(m).__name__ != "AIMessage":
+            continue
+        text = _extract_text(m.content).strip()
+        if text:
+            return text
+    return ""
+
+
+def _agentic_digest(tender: dict, state: dict, context: str) -> str:
+    """digest 子代理生成摘要 markdown；失敗回退欄位式 _llm_digest。"""
+    prompt = (
+        f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
+        f"核實欄位：{json.dumps({k: state.get(k) for k in ('issuer', 'tender_no', 'deadline', 'official_url')}, ensure_ascii=False)}\n"
+        f"核實筆記（00_source.md）：\n{context}\n"
+    )
+    try:
+        agent = _get_digest_agent()
+        result = agent.invoke({"messages": [("user", prompt)]})
+        md = _final_answer(result.get("messages", []))
+        return md or _llm_digest(tender, state, context)
+    except Exception:  # noqa: BLE001
+        return _llm_digest(tender, state, context)
+
+
 def digest_node(state: dict) -> dict:
     logs: list[dict] = []
     tid = state["tender_id"]
     dossier = Path(state["dossier_dir"])
     tender = state["tender"]
 
-    context = _gather_docs(dossier, logs)
-    digest_md = _llm_digest(tender, state, context)
+    context = state.get("source_md") or ""
+    if not context:
+        source = dossier / "00_source.md"
+        if source.exists():
+            context = source.read_text(encoding="utf-8")
+
+    digest_md = _agentic_digest(tender, state, context)
     (dossier / "01_digest.md").write_text(digest_md, encoding="utf-8")
     set_tender_status(tid, "digested")
     logs.append(_log("digest", "已生成 01_digest.md"))
-    return {"status": "digested", "logs": logs}
+    return {"status": "digested", "logs": logs, "digest_md": digest_md}
