@@ -28,7 +28,7 @@ GOV_ZH = (
     "數碼政府", "民政事務總署", "康樂及文化事務署", "食物環境衞生署", "食物環境衛生署",
     "漁農自然護理署", "律政司", "保安局", "發展局", "運輸及物流局", "房屋局",
     "醫務衞生局", "商務及經濟發展局", "創新科技及工業局", "環境及生態局",
-    "財經事務及庫務局", "政府飛行服務隊", "知識產權署", "公司註冊處", "土木工程拓展署"
+    "財經事務及庫務局", "政府飛行服務隊", "知識產權署", "公司註冊處", "土木工程拓展署", "數字政策辦公室"
 )
 GOV_EN = (
     "government", "govhk", "department of", "correctional services",
@@ -36,7 +36,7 @@ GOV_EN = (
     "leisure and cultural services", "food and environmental hygiene",
     "immigration", "customs", "police", "fire services", "treasury",
     "housing department", "transport department", "environmental protection",
-    "education bureau", "labour department", "social welfare", "government flying service", "civil engineering and development department"
+    "education bureau", "labour department", "social welfare", "government flying service", "civil engineering and development department", "digital policy office"
 )
 
 # 外國／非香港訊號
@@ -183,15 +183,22 @@ def _deep_keep(rec: dict) -> tuple[bool, str]:
     return (not _is_foreign_or_gov_issuer(issuer), issuer)
 
 
-def filter_hk(records: list[dict], target: int = 10, max_checks: int = 40) -> list[dict]:
-    """嚴格過濾：標題/slug 快篩後，並行 Jina 讀頁抽 issuer（冇 issuer 就全文），
-    剔除非港機構，直到集齊 target 個（或檢查上限／列表耗盡）。
+def filter_hk(
+    records: list[dict],
+    target: int = 10,
+    offset: int = 0,
+    max_checks: int | None = None,  # None = 唔設上限（掃描晒 fast-screen 幸存者）
+) -> list[dict]:
+    """嚴格過濾：標題/slug 快篩後，並行 Jina 讀頁抽 issuer，剔除非港機構／政府／冇 issuer。
 
-    以 `_DEEP_WORKERS` 為批大小並行深度檢查，保留原排序與 target/max_checks 語意。
-    保留嘅記錄會附上 `issuer`（抽到先有，抽唔到就冇呢個 key）。
+    回傳第 offset 起 target 個（分頁）。深度檢查至集齊 offset+target 個（或列表耗盡）。
+    max_checks 只係 optional safety bound；預設 None 即唔 cap。
     """
-    candidates = [r for r in records if is_hk(r) and not is_gov(r)][:max_checks]
+    candidates = [r for r in records if is_hk(r) and not is_gov(r)]
+    if max_checks is not None:
+        candidates = candidates[:max_checks]
     out: list[dict] = []
+    need = offset + target
     with ThreadPoolExecutor(max_workers=_DEEP_WORKERS) as ex:
         for i in range(0, len(candidates), _DEEP_WORKERS):
             chunk = candidates[i : i + _DEEP_WORKERS]
@@ -201,6 +208,6 @@ def filter_hk(records: list[dict], target: int = 10, max_checks: int = 40) -> li
                     if issuer:
                         rec["issuer"] = issuer
                     out.append(rec)
-                    if len(out) >= target:
-                        return out
-    return out
+                    if len(out) >= need:
+                        return out[offset : offset + target]
+    return out[offset : offset + target]

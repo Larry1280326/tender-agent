@@ -109,11 +109,11 @@ export default function Chat({
             for (let i = items.length - 1; i >= 0; i--) {
               const it = items[i];
               if (it.type === "tool" && !it.done) {
-                items[i] = { ...it, done: true, result: e.message, markdown: e.markdown };
+                items[i] = { ...it, done: true, result: e.message };
                 break;
               }
             }
-            return { ...m, items };
+            return { ...m, items, markdown: e.markdown || m.markdown };
           });
           if (e.node === "select_tender") onSessionsChanged?.();
         } else if (e.event === "error") {
@@ -213,18 +213,20 @@ export default function Chat({
                         {item.result}
                       </p>
                     )}
-                    {item.done && item.markdown && (
-                      <details className="mt-2">
-                        <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
-                          查看 Markdown 內容
-                        </summary>
-                        <div className="prose prose-sm max-w-none mt-2 rounded-md bg-white p-3 text-slate-700">
-                          <Markdown content={item.markdown} />
-                        </div>
-                      </details>
-                    )}
                   </div>
                 ),
+              )}
+              {m.role === "assistant" && m.markdown && (
+                <div className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm">
+                  <details>
+                    <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
+                      查看 Markdown 內容
+                    </summary>
+                    <div className="prose prose-sm max-w-none mt-2 text-slate-700">
+                      <Markdown content={m.markdown} />
+                    </div>
+                  </details>
+                </div>
               )}
             </div>
           </div>

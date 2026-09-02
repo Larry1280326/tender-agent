@@ -9,9 +9,9 @@ export type Session = {
 };
 
 export type TextItem = { type: "text"; text: string };
-export type ToolItem = { type: "tool"; name: string; result?: string; markdown?: string; done: boolean };
+export type ToolItem = { type: "tool"; name: string; result?: string; done: boolean };
 export type Item = TextItem | ToolItem;
-export type Message = { role: "user" | "assistant"; items: Item[] };
+export type Message = { role: "user" | "assistant"; items: Item[]; markdown?: string };
 
 export type ChatEvent = {
   event: string;

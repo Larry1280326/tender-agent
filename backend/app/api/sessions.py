@@ -92,7 +92,7 @@ def _reconstruct(messages) -> list[dict]:
                             summary, markdown = parse_markdown_result(_extract_text(m.content))
                             item["result"] = summary
                             if markdown:
-                                item["markdown"] = markdown
+                                out[i]["markdown"] = markdown
                             break
                     break
         # SystemMessage 忽略

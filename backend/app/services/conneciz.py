@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import ssl
 import time
 import urllib.parse
@@ -157,22 +158,24 @@ def slim(rec: dict) -> dict:
     }
 
 
-def dedupe(records: list[dict]) -> list[dict]:
-    """去除重複記錄：同一 issuer（Company_UID）+ 同一截止日，只保留第一條。
+def _norm_title(text: str) -> str:
+    """正規化標題做 dedupe key：小寫 + 去空白／標點，只留中英文／數字。"""
+    return re.sub(r"\W+", "", (text or "").lower())
 
-    Conneciz 會為同一個招標出多條唔同 _id 嘅記錄（標題甚至略有差異），
-    用 issuer+deadline 做穩定 key 去重，避免列表重複。
+
+def dedupe(records: list[dict]) -> list[dict]:
+    """去除重複記錄：同一 issuer + 同一截止日 + 同一正規化標題，只保留第一條。
+
+    舊版只按 issuer+deadline 去重，會誤刪同一機構同一日嘅唔同招標；
+    加正規化標題後，只摺起真正重複（標題相同）嘅記錄。
     """
     seen: set[str] = set()
     out: list[dict] = []
     for r in records:
         issuer = r.get("issuer_uid") or ""
         deadline = (r.get("deadline") or "")[:10]
-        if issuer:
-            key = f"uid|{issuer}|{deadline}"
-        else:
-            title = (r.get("title_en") or r.get("title_zh") or "").strip().lower()
-            key = f"title|{title}|{deadline}"
+        title = _norm_title(r.get("title_zh") or r.get("title_en") or "")
+        key = f"uid|{issuer}|{deadline}|{title}" if issuer else f"title|{title}|{deadline}"
         if key in seen:
             continue
         seen.add(key)

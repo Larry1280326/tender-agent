@@ -58,9 +58,37 @@ def _fmt_tender(idx: int, t: dict) -> str:
     return line
 
 
+# list_tenders 嘅讀取範圍（2 天至 2 個月，最多 5 頁）。select_tender 必須用同一範圍／cache key
+# 先保證「列出嚟嘅 tender_id」一定搵得返 —— 用唔同範圍會令 select 搵唔到 list 顯示嘅項目。
+LIST_MAX_PAGES = 5
+LIST_MIN_DAYS_AHEAD = 2
+LIST_MAX_DAYS_AHEAD = 60
+
+
+def _list_candidates() -> list[dict]:
+    """list_tenders / select_tender 共用嘅候選集：同一 fetch 範圍（同一個 TTL cache key）。"""
+    return conneciz.fetch_tenders(
+        max_pages=LIST_MAX_PAGES,
+        min_days_ahead=LIST_MIN_DAYS_AHEAD,
+        max_days_ahead=LIST_MAX_DAYS_AHEAD,
+    )
+
+
+def _find_tender(tender_id: str) -> dict | None:
+    """按 id 搵招標：先喺 list_tenders 顯示嗰個範圍搵，搵唔到先掃闊啲（預設 3 頁 × 365 日）兜底。"""
+    for rec in _list_candidates():
+        if rec.get("_id") == tender_id:
+            return rec
+    for rec in conneciz.fetch_tenders():  # 預設範圍兜底（例如舊日見到嘅項目）
+        if rec.get("_id") == tender_id:
+            return rec
+    return None
+
+
 @tool
-def list_tenders() -> str:
-    """即時讀取 Conneciz 香港非政府招標列表（每項含 tender_id），已嚴格過濾非港機構、剔除重複及已選取項目，俾用戶揀項目。當用戶要求「列出招標／找招標／同步」時用。"""
+def list_tenders(page: int = 1) -> str:
+    """即時讀取 Conneciz 香港非政府招標列表（每項含 tender_id），已嚴格過濾非港機構、剔除重複及已選取項目。分頁：每頁 10 個，page=1 第一頁；用戶想睇更多／唔鍾意而家呢頁就 call 下一頁（page=2、3…）。當用戶要求「列出招標／找招標／同步」時用。"""
+    page = max(1, page)
     selected = store.list_tenders()
     seen_ids = {e.get("_id") for e in selected}  # 已選取項目（by id）
     # 同一 issuer+截止日嘅 sibling 記錄都當「已選取」剔除（避免選咗其中一條，另一條仲出現）
@@ -68,9 +96,7 @@ def list_tenders() -> str:
         (e.get("issuer_uid") or "", (e.get("deadline") or "")[:10])
         for e in selected if e.get("issuer_uid")
     }
-    records = conneciz.dedupe(
-        conneciz.fetch_tenders(max_pages=5, min_days_ahead=2, max_days_ahead=60)  # 2 天至 2 個月
-    )
+    records = conneciz.dedupe(_list_candidates())
     print(*records)
     print()
     print()
@@ -80,10 +106,10 @@ def list_tenders() -> str:
         and (r.get("issuer_uid") or "", (r.get("deadline") or "")[:10]) not in seen_keys
     ]
     print(*records)
-    ts = filter_hk(records, target=10)
+    ts = filter_hk(records, target=10, offset=(page - 1) * 10)
     if not ts:
-        return "無香港非政府招標。"
-    lines = [f"共 {len(ts)} 個香港非政府招標："]
+        return "無香港非政府招標。" if page == 1 else f"第 {page} 頁冇更多香港非政府招標。"
+    lines = [f"第 {page} 頁，共 {len(ts)} 個香港非政府招標："]
     for i, t in enumerate(ts, 1):
         lines.append(_fmt_tender(i, t))
     return "\n".join(lines)
@@ -92,7 +118,7 @@ def list_tenders() -> str:
 @tool
 def select_tender(tender_id: str, config: Annotated[RunnableConfig, InjectedToolArg]) -> str:
     """用戶揀定某個招標項目後綁定（用 list_tenders 回傳嘅 tender_id）：寫入 tender_state.json 並綁定到目前 session。"""
-    tender = next((t for t in conneciz.fetch_tenders() if t.get("_id") == tender_id), None)
+    tender = _find_tender(tender_id)
     if tender is None:
         return f"找不到 id={tender_id} 嘅招標（可用 list_tenders 查正確 id）。"
     thread_id = config.get("configurable", {}).get("thread_id", "")
