@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 from langchain_core.runnables import RunnableConfig
@@ -12,7 +13,7 @@ from langchain_core.tools import InjectedToolArg, tool
 
 from .. import sessions, store
 from ..classify import filter_hk
-from ..services import common, conneciz, tender_state, utils
+from ..services import common, conneciz, file_reader, tender_state, utils
 from .pipeline import get_pipeline
 from .web_tools import read_page, search_web
 
@@ -97,15 +98,13 @@ def list_tenders(page: int = 1) -> str:
         for e in selected if e.get("issuer_uid")
     }
     records = conneciz.dedupe(_list_candidates())
-    print(*records)
-    print()
-    print()
+    print(len(records))
     records = [
         r for r in records
         if r.get("_id") not in seen_ids
         and (r.get("issuer_uid") or "", (r.get("deadline") or "")[:10]) not in seen_keys
     ]
-    print(*records)
+    print(len(records))
     ts = filter_hk(records, target=10, offset=(page - 1) * 10)
     if not ts:
         return "無香港非政府招標。" if page == 1 else f"第 {page} 頁冇更多香港非政府招標。"
@@ -165,6 +164,36 @@ def download_file(url: str, tender_id: str = "") -> str:
     )
 
 
+# read_file 回傳俾 LLM 嘅文字長度上限（避免爆 context）。
+READ_LIMIT = 20000
+
+
+@tool
+def read_file(path: str) -> str:
+    """讀取本地檔案（已上傳／已下載）嘅文字內容。path 係 /upload 回傳嘅路徑（相對 data/ 目錄）或 dossier docs/ 內檔案，支援 pdf/docx/xlsx/doc/xls/txt/csv。當用戶話「上傳咗檔案」並俾咗路徑、或要讀已下載嘅文件時用。"""
+    p = Path(path)
+    if not p.is_absolute():
+        p = store.DATA_DIR / p
+    p = p.resolve()
+    if not p.is_file() or not p.is_relative_to(store.DATA_DIR):
+        return f"找不到檔案或路徑越界（只可讀 {store.DATA_DIR} 內嘅檔案）：{path}"
+    ext = p.suffix.lower()
+    if ext not in file_reader.READABLE_EXTENSIONS:
+        supported = " / ".join(sorted(file_reader.READABLE_EXTENSIONS))
+        return f"不支援讀取嘅副檔名：{ext or '(無)'}（只支援 {supported}）。"
+    try:
+        text = file_reader.extract_text(p)
+    except ValueError as e:
+        return str(e)
+    except Exception as e:  # noqa: BLE001
+        return f"讀取失敗：{e}"
+    if not text.strip():
+        return f"檔案 {p.name} 抽取唔到文字。"
+    if len(text) > READ_LIMIT:
+        text = text[:READ_LIMIT] + f"\n\n…（內容過長，共 {len(text)} 字元，已截斷至前 {READ_LIMIT} 字元）"
+    return f"[{p.name}]\n{text}"
+
+
 ALL_TOOLS = [
     list_tenders,
     select_tender,
@@ -172,4 +201,5 @@ ALL_TOOLS = [
     search_web,
     read_page,
     download_file,
+    read_file,
 ]

@@ -22,6 +22,12 @@ class ChatRequest(BaseModel):
     message: str = ""
 
 
+class UploadResponse(BaseModel):
+    path: str
+    filename: str
+    size: int
+
+
 class SessionCreate(BaseModel):
     title: str = "新專案"
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getMessages, Message, streamChat } from "@/lib/api";
+import { getMessages, Message, streamChat, uploadFile } from "@/lib/api";
 import Markdown from "@/components/Markdown";
 
 const EXAMPLES = [
@@ -32,6 +32,8 @@ export default function Chat({
   const autoSentFor = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
 
   // 載入 session 歷史（新 session 喺歷史載入後先自動發訊，避免 race）
   useEffect(() => {
@@ -75,18 +77,44 @@ export default function Chat({
 
   const send = async (raw: string) => {
     const text = raw.trim();
-    if (!text || runningRef.current || !sessionId) return;
+    const attached = file;
+    if ((!text && !attached) || runningRef.current || !sessionId) return;
     runningRef.current = true;
     setRunning(true);
     setInput("");
+    setFile(null);
+
+    const displayText = attached
+      ? (text ? `📎 ${attached.name}\n${text}` : `📎 ${attached.name}`)
+      : text;
     setMessages((prev) => [
       ...prev,
-      { role: "user", items: [{ type: "text", text }] },
+      { role: "user", items: [{ type: "text", text: displayText }] },
       { role: "assistant", items: [] },
     ]);
 
+    let attachmentPath = "";
+    if (attached) {
+      try {
+        const up = await uploadFile(sessionId, attached);
+        attachmentPath = up.path;
+      } catch (err) {
+        patchLastAssistant((m) => ({
+          ...m,
+          items: [...m.items, { type: "text", text: `⚠️ 上傳失敗：${String(err)}` }],
+        }));
+        runningRef.current = false;
+        setRunning(false);
+        return;
+      }
+    }
+
+    const composed = attachmentPath
+      ? (text ? `已上傳檔案：${attachmentPath}\n${text}` : `已上傳檔案：${attachmentPath}\n請閱讀此檔案並摘要。`)
+      : text;
+
     try {
-      await streamChat(sessionId, text, (e) => {
+      await streamChat(sessionId, composed, (e) => {
         if (e.event === "text" && e.delta) {
           patchLastAssistant((m) => {
             const items = m.items.slice();
@@ -235,7 +263,34 @@ export default function Chat({
       </div>
 
       <div className="border-t border-slate-200 bg-white p-3">
+        {file && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+            <span className="min-w-0 truncate text-slate-700">📎 {file.name}</span>
+            <button
+              onClick={() => setFile(null)}
+              title="移除檔案"
+              className="ml-auto shrink-0 text-slate-400 hover:text-slate-600"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+            className="hidden"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!sessionId}
+            title="上傳檔案"
+            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            📎
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -252,7 +307,7 @@ export default function Chat({
           />
           <button
             onClick={() => void send(input)}
-            disabled={running || !input.trim() || !sessionId}
+            disabled={running || (!input.trim() && !file) || !sessionId}
             className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
           >
             {running ? "處理中…" : "送出"}

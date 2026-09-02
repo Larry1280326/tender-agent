@@ -55,6 +55,17 @@ export async function getMessages(id: string): Promise<Message[]> {
   ).then((r) => r.messages);
 }
 
+export async function uploadFile(
+  threadId: string,
+  file: File,
+): Promise<{ path: string; filename: string; size: number }> {
+  const fd = new FormData();
+  fd.append("thread_id", threadId);
+  fd.append("file", file);
+  // 唔好手動設 Content-Type：瀏覽器要自己加 multipart boundary。
+  return json(await fetch(`${API_URL}/upload`, { method: "POST", body: fd }));
+}
+
 export async function streamChat(
   threadId: string,
   message: string,

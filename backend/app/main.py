@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agent.agent import init_agent, shutdown_agent
-from .api import chat, sessions, tenders
+from .api import chat, sessions, tenders, upload
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,3 +36,4 @@ app.add_middleware(
 app.include_router(sessions.router)
 app.include_router(tenders.router)
 app.include_router(chat.router)
+app.include_router(upload.router)
