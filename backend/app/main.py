@@ -1,6 +1,7 @@
 """FastAPI app：CORS + routers（sessions / tenders / chat）。"""
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agent.agent import init_agent, shutdown_agent
 from .api import chat, sessions, tenders
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager

@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createSession, listSessions, Session } from "@/lib/api";
+import { createSession, deleteSession, listSessions, Session } from "@/lib/api";
 
 type Props = {
   activeId: string | null;
   refreshSignal: number;
   onSelect: (id: string, title: string) => void;
   onCreate: (id: string) => void;
+  onDelete: (id: string) => void;
 };
 
-export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate }: Props) {
+export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate, onDelete }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -38,6 +39,17 @@ export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate }:
     }
   };
 
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("確定刪除此專案？此操作無法復原。")) return;
+    try {
+      await deleteSession(id);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      onDelete(id);
+    } catch {
+      /* backend 未就緒 */
+    }
+  };
+
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-3">
@@ -57,17 +69,28 @@ export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate }:
           </p>
         ) : (
           sessions.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => onSelect(s.id, s.title)}
-              className={`mb-1 block w-full truncate rounded-lg px-3 py-2 text-left text-sm ${
-                s.id === activeId
-                  ? "bg-slate-100 font-medium text-slate-900"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {s.title || "新專案"}
-            </button>
+            <div key={s.id} className="group mb-1 flex items-center rounded-lg">
+              <button
+                onClick={() => onSelect(s.id, s.title)}
+                className={`block w-full truncate rounded-lg px-3 py-2 text-left text-sm ${
+                  s.id === activeId
+                    ? "bg-slate-100 font-medium text-slate-900"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {s.title || "新專案"}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDelete(s.id);
+                }}
+                title="刪除"
+                className="shrink-0 rounded-md px-2 py-1 text-xs text-slate-400 opacity-0 transition-opacity hover:text-red-600 group-hover:opacity-100"
+              >
+                🗑
+              </button>
+            </div>
           ))
         )}
       </div>

@@ -43,12 +43,17 @@ def _format_node_result(action: str, update: dict) -> str:
 
 
 def _fmt_tender(idx: int, t: dict) -> str:
-    """一行招標：序號 + 中文名稱（超連結）+ 截止日期 + tender_id。"""
+    """一行招標：序號 + 中文名稱（超連結）+ 截止日期 + 招標方 + tender_id。"""
     title = t.get("title_zh") or t.get("title_en") or t.get("_id") or ""
     url = t.get("url") or ""
     deadline = (t.get("deadline") or "")[:10]
+    issuer = (t.get("issuer") or "").strip()
     name = f"[{title}]({url})" if url else title
-    return f"{idx}. {name} ｜ 截止 {deadline} ｜ id={t.get('_id', '')}"
+    line = f"{idx}. {name} ｜ 截止 {deadline}"
+    if issuer:
+        line += f" ｜ 招標方 {issuer}"
+    line += f" ｜ id={t.get('_id', '')}"
+    return line
 
 
 @tool
@@ -62,11 +67,15 @@ def list_tenders() -> str:
         for e in selected if e.get("issuer_uid")
     }
     records = conneciz.dedupe(conneciz.fetch_tenders(max_pages=5))
+    print(*records)
+    print()
+    print()
     records = [
         r for r in records
         if r.get("_id") not in seen_ids
         and (r.get("issuer_uid") or "", (r.get("deadline") or "")[:10]) not in seen_keys
     ]
+    print(*records)
     ts = filter_hk(records, target=10)
     if not ts:
         return "無香港非政府招標。"

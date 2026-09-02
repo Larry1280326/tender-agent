@@ -24,6 +24,15 @@ export default function Home() {
     }
   };
 
+  const handleDelete = (id: string) => {
+    if (sessionId === id) {
+      setSessionId(null);
+      setSessionTitle("新專案");
+      setAutoMessage(null);
+    }
+    setRefreshSignal((n) => n + 1);
+  };
+
   return (
     <div className="flex h-screen">
       <Sidebar
@@ -39,6 +48,7 @@ export default function Home() {
           setSessionTitle("新專案");
           setAutoMessage("請列出所有香港非政府招標項目");
         }}
+        onDelete={handleDelete}
       />
       <div className="flex-1">
         <Chat

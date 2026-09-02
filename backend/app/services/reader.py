@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import re
+import threading
 import urllib.request
 
-from .common import UA, urlopen
+from .common import TTLCache, UA, urlopen
 
 JINA_READER = "https://r.jina.ai/"
+
+# 短 TTL cache：同一 session 內重複讀同一 URL 唔使再打 Jina（Jina 慢、且易 rate-limit）。
+# lock 保護 cache dict（parallel fetch 時多線程讀寫）。
+_reader_cache = TTLCache(ttl=600.0, maxsize=256)
+_cache_lock = threading.Lock()
 
 # ── 抽取 regex（中文標籤專做 Conneciz 頁，英文標籤做官方通告頁） ─────────────
 
@@ -40,7 +46,11 @@ _RE_DOC = re.compile(
 
 
 def read(url: str, api_key: str) -> str:
-    """Jina Reader 讀頁，回傳 markdown 內容。"""
+    """Jina Reader 讀頁，回傳 markdown 內容（成功結果短 TTL cache）。"""
+    with _cache_lock:
+        cached = _reader_cache.get(url)
+    if cached is not None:
+        return cached
     req = urllib.request.Request(
         JINA_READER + url,
         headers={
@@ -50,7 +60,11 @@ def read(url: str, api_key: str) -> str:
         },
     )
     with urlopen(req, timeout=120) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        text = resp.read().decode("utf-8", errors="replace")
+    if text:  # 空 = rate-limit／失敗，唔 cache（俾 caller retry）
+        with _cache_lock:
+            _reader_cache.set(url, text)
+    return text
 
 
 def _first(pattern: re.Pattern, text: str) -> str | None:

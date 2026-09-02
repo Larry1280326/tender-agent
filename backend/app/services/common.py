@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import ssl
+import time
 import urllib.request
 from pathlib import Path
 
@@ -36,3 +37,31 @@ def urlopen(req: urllib.request.Request, timeout: int = 60):
                 continue
             raise
     raise last_err  # type: ignore[misc]
+
+
+class TTLCache:
+    """極簡 TTL cache：`ttl` 秒後過期，超過 `maxsize` 用 FIFO 逐出。
+
+    只 cache 非空值（caller 負責：空 = rate-limit／失敗，唔好 cache 以免卡死一段時間）。
+    """
+
+    def __init__(self, ttl: float = 300.0, maxsize: int = 256):
+        self.ttl = ttl
+        self.maxsize = maxsize
+        self._data: dict = {}
+
+    def get(self, key):
+        item = self._data.get(key)
+        if item is None:
+            return None
+        value, at = item
+        if time.monotonic() - at > self.ttl:
+            del self._data[key]
+            return None
+        return value
+
+    def set(self, key, value) -> None:
+        self._data[key] = (value, time.monotonic())
+        if len(self._data) > self.maxsize:
+            oldest = next(iter(self._data))
+            self._data.pop(oldest, None)

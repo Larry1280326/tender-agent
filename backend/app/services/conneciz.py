@@ -6,12 +6,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import ssl
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from .common import TTLCache
+
+logger = logging.getLogger(__name__)
 
 API = "https://conneciz.app/api/1.1/obj/tender?loct=HK"
 
@@ -175,6 +180,9 @@ def dedupe(records: list[dict]) -> list[dict]:
     return out
 
 
+_fetch_cache = TTLCache(ttl=300.0, maxsize=8)
+
+
 def fetch_tenders(
     min_days_ahead: int = 2,
     max_days_ahead: int = 365,
@@ -182,12 +190,25 @@ def fetch_tenders(
 ) -> list[dict]:
     """即時讀取 Conneciz 列表：截止日在 [now+min, now+max] 內，按 ClosingDateTime 遞減。
 
-    冇基線／增量／watermark —— 純粹攞列表俾用戶揀項目。
+    冇基線／增量／watermark —— 純粹攞列表俾用戶揀項目。短 TTL cache 避免重複打 API。
     """
+    key = (min_days_ahead, max_days_ahead, max_pages)
+    cached = _fetch_cache.get(key)
+    if cached is not None:
+        logger.info("fetch_tenders cache HIT (key=%s, %d records)", key, len(cached))
+        return cached
+    logger.info(
+        "fetch_tenders new fetch (min_days_ahead=%s, max_days_ahead=%s, max_pages=%s)",
+        min_days_ahead,
+        max_days_ahead,
+        max_pages,
+    )
     now = datetime.now(timezone.utc)
     deadline_min = (now + timedelta(days=min_days_ahead)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     deadline_max = (now + timedelta(days=max_days_ahead)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     records = iter_since(None, deadline_min, deadline_max, max_pages=max_pages)
     slims = [slim(r) for r in records]
     slims.sort(key=lambda r: r.get("deadline") or "", reverse=True)
+    if slims:
+        _fetch_cache.set(key, slims)
     return slims

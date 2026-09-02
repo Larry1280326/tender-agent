@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import config
@@ -198,15 +199,23 @@ def verify_node(state: dict) -> dict:
     queries = _llm_make_queries(tender, extracted)
     candidates: list[dict] = []
     if config.SERPER_API_KEY:
-        for q in queries:
+        # 平行搜尋（每條關鍵字獨立打 Serper）
+        def _search(q: str) -> tuple[str, list[dict] | None, str | None]:
             try:
-                res = serper.search(q, config.SERPER_API_KEY, num=10)
-                for r in res:
-                    r["_query"] = q
-                candidates.extend(res)
-                logs.append(_log("verify", f"搜尋「{q}」：{len(res)} 條"))
+                return q, serper.search(q, config.SERPER_API_KEY, num=10), None
             except Exception as e:  # noqa: BLE001
-                logs.append(_log("verify", f"Serper 搜尋失敗（{q}）：{e}", "error"))
+                return q, None, str(e)
+
+        if queries:
+            with ThreadPoolExecutor(max_workers=len(queries)) as ex:
+                for q, res, err in ex.map(_search, queries):
+                    if err is not None:
+                        logs.append(_log("verify", f"Serper 搜尋失敗（{q}）：{err}", "error"))
+                        continue
+                    for r in res:
+                        r["_query"] = q
+                    candidates.extend(res)
+                    logs.append(_log("verify", f"搜尋「{q}」：{len(res)} 條"))
     else:
         logs.append(_log("verify", "缺 SERPER_API_KEY，跳過官方搜尋", "warn"))
 
@@ -214,27 +223,45 @@ def verify_node(state: dict) -> dict:
     ranked = _rank_candidates(candidates)
     chosen = _llm_pick_pages(tender, extracted, ranked)
     title_by_link = {r.get("link"): r.get("title") for r in ranked}
+    urls_to_fetch = [u for u in chosen if u and config.JINA_API_KEY]
+    for u in urls_to_fetch:
+        logs.append(_log("verify", f"LLM 揀咗讀取：{u}"))
+
+    # 平行讀取官方頁面（Jina Reader 慢，逐頁打太耐）；apply 階段照 chosen 順序，保留「先到先得」語義
+    fetched: dict[str, str] = {}
+    fetch_errors: dict[str, str] = {}
+    if urls_to_fetch:
+        def _fetch_page(url: str) -> tuple[str, str | None, str | None]:
+            try:
+                return url, reader.read(url, config.JINA_API_KEY), None
+            except Exception as e:  # noqa: BLE001
+                return url, None, str(e)
+
+        with ThreadPoolExecutor(max_workers=len(urls_to_fetch)) as ex:
+            for url, text, err in ex.map(_fetch_page, urls_to_fetch):
+                if err is not None:
+                    fetch_errors[url] = err
+                else:
+                    fetched[url] = text
+
     pages: list[dict] = []
-    for url in chosen:
-        if not (url and config.JINA_API_KEY):
+    for url in urls_to_fetch:
+        if url in fetch_errors:
+            logs.append(_log("verify", f"頁面讀取失敗：{url}：{fetch_errors[url]}", "warn"))
             continue
-        logs.append(_log("verify", f"LLM 揀咗讀取：{url}"))
-        try:
-            text = reader.read(url, config.JINA_API_KEY)
-            off_ext = reader.extract(text)
-            pages.append({
-                "url": url,
-                "title": title_by_link.get(url) or off_ext.get("title") or "",
-                "text": text,
-                "extracted": off_ext,
-            })
-            doc_links = list(off_ext.get("doc_links") or doc_links)
-            tender_no = off_ext.get("tender_no") or tender_no
-            issuer = off_ext.get("issuer") or issuer
-            if not extracted.get("deadline"):
-                extracted["deadline"] = off_ext.get("deadline")
-        except Exception as e:  # noqa: BLE001
-            logs.append(_log("verify", f"頁面讀取失敗：{url}：{e}", "warn"))
+        text = fetched[url]
+        off_ext = reader.extract(text)
+        pages.append({
+            "url": url,
+            "title": title_by_link.get(url) or off_ext.get("title") or "",
+            "text": text,
+            "extracted": off_ext,
+        })
+        doc_links = list(off_ext.get("doc_links") or doc_links)
+        tender_no = off_ext.get("tender_no") or tender_no
+        issuer = off_ext.get("issuer") or issuer
+        if not extracted.get("deadline"):
+            extracted["deadline"] = off_ext.get("deadline")
     if not pages:
         logs.append(_log("verify", "LLM 冇揀要讀嘅頁，以 Conneciz 資料為準", "warn"))
     official_url = pages[0]["url"] if pages else ""

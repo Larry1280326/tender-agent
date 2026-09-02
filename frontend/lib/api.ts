@@ -43,6 +43,11 @@ export async function createSession(): Promise<Session> {
   );
 }
 
+export async function deleteSession(id: string): Promise<void> {
+  const res = await fetch(`${API_URL}/sessions/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function getMessages(id: string): Promise<Message[]> {
   return json<{ messages: Message[] }>(
     await fetch(`${API_URL}/sessions/${id}/messages`),
