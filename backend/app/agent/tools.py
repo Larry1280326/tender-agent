@@ -12,7 +12,7 @@ from langchain_core.tools import InjectedToolArg, tool
 
 from .. import sessions, store
 from ..classify import filter_hk
-from ..services import common, conneciz, tender_state
+from ..services import common, conneciz, tender_state, utils
 from .pipeline import get_pipeline
 from .web_tools import read_page, search_web
 
@@ -139,10 +139,37 @@ def process_tender(tender_id: str) -> str:
     return common.markdown_result(_format_node_result("核實＋消化", result), result.get("digest_md"))
 
 
+@tool
+def download_file(url: str, tender_id: str = "") -> str:
+    """下載單一文件（URL 副檔名須為 pdf/doc/docx/xls/xlsx/zip/txt/csv/ppt/pptx/rar/7z）。有 tender_id 就存入該招標 dossier 嘅 docs/，否則存到 data/downloads/。回傳本地路徑同檔案大小。"""
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return "URL 唔係 http(s) 連結。"
+    ext = utils.allowed_ext(url)
+    if ext is None:
+        allowed = " / ".join(sorted(utils.ALLOWED_EXTENSIONS))
+        return f"不支援嘅副檔名：{url}（只支援 {allowed}）。"
+    if tender_id:
+        if store.get_tender(tender_id) is None:
+            return f"找不到招標 {tender_id}（可用 list_tenders 查正確 id）。"
+        dest = store.dossier_dir(tender_id) / "docs"
+    else:
+        dest = store.DATA_DIR / "downloads"
+    dest.mkdir(parents=True, exist_ok=True)
+    result = utils.download(url, dest, 1, 100 * 1024 * 1024)
+    if not result.get("ok"):
+        return f"下載失敗：{result.get('error') or url}"
+    path = dest / result["file"]
+    return common.markdown_result(
+        f"已下載 {result['file']}（{result['size']} bytes, sha1 {result['sha1']}）→ {path}",
+        None,
+    )
+
+
 ALL_TOOLS = [
     list_tenders,
     select_tender,
     process_tender,
     search_web,
     read_page,
+    download_file,
 ]
