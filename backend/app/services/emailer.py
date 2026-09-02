@@ -9,7 +9,7 @@ from .. import config
 
 # smtp.gmail.com 會 round-robin 到唔同 IP，部分可能連唔到（尤其經 VPN 嘅「直連」路由）。
 # 用多個 hostname 做 fallback，各自重新解析 DNS，盡量踩中可達 IP。
-SMTP_HOSTS = ("smtp.gmail.com", "smtp.googlemail.com")
+SMTP_HOSTS = ("smtp.googlemail.com", "smtp.gmail.com")
 SMTP_PORT = 587
 TIMEOUT = 15
 ATTEMPTS_PER_HOST = 2
