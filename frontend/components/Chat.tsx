@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { getMessages, Message, resumeChat, streamChat, uploadFile } from "@/lib/api";
 import Markdown from "@/components/Markdown";
 
@@ -18,6 +18,179 @@ type Props = {
   onSessionsChanged?: () => void;
 };
 
+type PendingApproval = {
+  to?: string;
+  subject?: string;
+  body?: string;
+  attachments?: string[];
+};
+
+// 單一訊息氣泡，memo 化：串流時只有正在增長／最後一條訊息會重新 render，
+// 其他歷史訊息（參考相同）會跳過，避免整段對話逐 token 重畫。
+const MessageBubble = memo(function MessageBubble({
+  message,
+  running,
+}: {
+  message: Message;
+  running: boolean;
+}) {
+  return (
+    <div className={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
+      <div
+        className={
+          message.role === "user"
+            ? "max-w-[85%] rounded-2xl bg-slate-900 px-4 py-2 text-sm text-white"
+            : "max-w-[85%] space-y-2"
+        }
+      >
+        {message.items.map((item, j) =>
+          item.type === "text" ? (
+            message.role === "user" ? (
+              <p key={j} className="whitespace-pre-wrap text-sm text-white">
+                {item.text}
+              </p>
+            ) : (
+              <div
+                key={j}
+                className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
+              >
+                <Markdown content={item.text || (running ? "…" : "")} />
+              </div>
+            )
+          ) : (
+            <div
+              key={j}
+              className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs"
+            >
+              <div className="flex items-center gap-2 font-medium text-sky-700 break-all">
+                {item.done ? "🔧" : "⏳"} {item.label || item.name}
+              </div>
+              {!item.label && item.done && item.result && (
+                <p className="mt-1 whitespace-pre-wrap text-slate-600">
+                  {item.result}
+                </p>
+              )}
+            </div>
+          ),
+        )}
+        {message.role === "assistant" &&
+          (message.docs ?? []).map((doc, di) => (
+            <div
+              key={di}
+              className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
+            >
+              <details>
+                <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
+                  {doc.title}
+                </summary>
+                <div className="prose prose-sm max-w-none mt-2 text-slate-700">
+                  <Markdown content={doc.content} />
+                </div>
+              </details>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+});
+
+// 輸入區獨立成 component，input／file state 由佢自己持有：
+// 打字只會 re-render 呢個輕量 component，唔會再連累成段對話重畫。
+export type ComposerHandle = { setValue: (v: string) => void };
+
+const Composer = forwardRef<ComposerHandle, {
+  sessionId: string | null;
+  running: boolean;
+  disabled: boolean;
+  onSend: (text: string, file: File | null) => void;
+}>(function Composer({ sessionId, running, disabled, onSend }, ref) {
+  const [input, setInput] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(ref, () => ({
+    setValue: (v: string) => {
+      setInput(v);
+      inputRef.current?.focus();
+    },
+  }));
+
+  const canSend =
+    !running && !disabled && !!sessionId && (input.trim() !== "" || !!file);
+
+  const submit = () => {
+    if (!canSend) return;
+    const text = input.trim();
+    const attached = file;
+    setInput("");
+    setFile(null);
+    onSend(text, attached);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submit();
+    }
+  };
+
+  return (
+    <div className="border-t border-slate-200 bg-white p-3">
+      {file && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+          <span className="min-w-0 truncate text-slate-700">📎 {file.name}</span>
+          <button
+            onClick={() => setFile(null)}
+            title="移除檔案"
+            className="ml-auto shrink-0 text-slate-400 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      <div className="flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+          className="hidden"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!sessionId}
+          title="上傳檔案"
+          className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          📎
+        </button>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          placeholder={
+            sessionId
+              ? "問佢搵招標、核實、生成摘要…（Enter 送出）"
+              : "請先建立或選擇一個專案"
+          }
+          disabled={!sessionId || disabled}
+          className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50"
+        />
+        <button
+          onClick={submit}
+          disabled={!canSend}
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          {running ? "處理中…" : "送出"}
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export default function Chat({
   sessionId,
   sessionTitle,
@@ -26,19 +199,12 @@ export default function Chat({
   onSessionsChanged,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
   const runningRef = useRef(false);
   const autoSentFor = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [pendingApproval, setPendingApproval] = useState<{
-    to?: string;
-    subject?: string;
-    body?: string;
-  } | null>(null);
+  const composerRef = useRef<ComposerHandle>(null);
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 
   // 載入 session 歷史（新 session 喺歷史載入後先自動發訊，避免 race）
   useEffect(() => {
@@ -57,7 +223,7 @@ export default function Chat({
       if (autoMessage && autoSentFor.current !== sessionId) {
         autoSentFor.current = sessionId;
         onAutoMessageConsumed();
-        void send(autoMessage);
+        void send(autoMessage, null);
       }
     })();
     return () => {
@@ -80,14 +246,11 @@ export default function Chat({
       return copy;
     });
 
-  const send = async (raw: string) => {
+  const send = async (raw: string, attached: File | null) => {
     const text = raw.trim();
-    const attached = file;
     if ((!text && !attached) || runningRef.current || !sessionId) return;
     runningRef.current = true;
     setRunning(true);
-    setInput("");
-    setFile(null);
 
     const displayText = attached
       ? (text ? `📎 ${attached.name}\n${text}` : `📎 ${attached.name}`)
@@ -134,7 +297,10 @@ export default function Chat({
         } else if (e.event === "tool_start") {
           patchLastAssistant((m) => ({
             ...m,
-            items: [...m.items, { type: "tool", name: e.node || "tool", done: false }],
+            items: [
+              ...m.items,
+              { type: "tool", name: e.node || "tool", label: e.label, done: false },
+            ],
           }));
         } else if (e.event === "tool_end") {
           patchLastAssistant((m) => {
@@ -220,13 +386,6 @@ export default function Chat({
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      void send(input);
-    }
-  };
-
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
@@ -248,10 +407,7 @@ export default function Chat({
             {EXAMPLES.map((ex) => (
               <button
                 key={ex}
-                onClick={() => {
-                  setInput(ex);
-                  inputRef.current?.focus();
-                }}
+                onClick={() => composerRef.current?.setValue(ex)}
                 className="block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
               >
                 {ex}
@@ -261,65 +417,7 @@ export default function Chat({
         )}
 
         {messages.map((m, i) => (
-          <div
-            key={i}
-            className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
-          >
-            <div
-              className={
-                m.role === "user"
-                  ? "max-w-[85%] rounded-2xl bg-slate-900 px-4 py-2 text-sm text-white"
-                  : "max-w-[85%] space-y-2"
-              }
-            >
-              {m.items.map((item, j) =>
-                item.type === "text" ? (
-                  m.role === "user" ? (
-                    <p key={j} className="whitespace-pre-wrap text-sm text-white">
-                      {item.text}
-                    </p>
-                  ) : (
-                    <div
-                      key={j}
-                      className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
-                    >
-                      <Markdown content={item.text || (running ? "…" : "")} />
-                    </div>
-                  )
-                ) : (
-                  <div
-                    key={j}
-                    className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs"
-                  >
-                    <div className="flex items-center gap-2 font-medium text-sky-700">
-                      {item.done ? "🔧" : "⏳"} {item.name}
-                    </div>
-                    {item.done && item.result && (
-                      <p className="mt-1 whitespace-pre-wrap text-slate-600">
-                        {item.result}
-                      </p>
-                    )}
-                  </div>
-                ),
-              )}
-              {m.role === "assistant" &&
-                (m.docs ?? []).map((doc, di) => (
-                  <div
-                    key={di}
-                    className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
-                  >
-                    <details>
-                      <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
-                        {doc.title}
-                      </summary>
-                      <div className="prose prose-sm max-w-none mt-2 text-slate-700">
-                        <Markdown content={doc.content} />
-                      </div>
-                    </details>
-                  </div>
-                ))}
-            </div>
-          </div>
+          <MessageBubble key={i} message={m} running={running} />
         ))}
         {pendingApproval && (
           <div className="flex justify-start">
@@ -340,6 +438,13 @@ export default function Chat({
                     {pendingApproval.body}
                   </pre>
                 </div>
+                {pendingApproval.attachments &&
+                  pendingApproval.attachments.length > 0 && (
+                    <p>
+                      <span className="font-medium">附件：</span>
+                      {pendingApproval.attachments.map((name) => `📎 ${name}`).join("、")}
+                    </p>
+                  )}
               </div>
               <div className="flex gap-2">
                 <button
@@ -363,58 +468,13 @@ export default function Chat({
         <div ref={bottomRef} />
       </div>
 
-      <div className="border-t border-slate-200 bg-white p-3">
-        {file && (
-          <div className="mb-2 flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
-            <span className="min-w-0 truncate text-slate-700">📎 {file.name}</span>
-            <button
-              onClick={() => setFile(null)}
-              title="移除檔案"
-              className="ml-auto shrink-0 text-slate-400 hover:text-slate-600"
-            >
-              ✕
-            </button>
-          </div>
-        )}
-        <div className="flex items-end gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
-            className="hidden"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!sessionId}
-            title="上傳檔案"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-          >
-            📎
-          </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            rows={1}
-            placeholder={
-              sessionId
-                ? "問佢搵招標、核實、生成摘要…（Enter 送出）"
-                : "請先建立或選擇一個專案"
-            }
-            disabled={!sessionId || !!pendingApproval}
-            className="flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none disabled:bg-slate-50"
-          />
-          <button
-            onClick={() => void send(input)}
-            disabled={running || !!pendingApproval || (!input.trim() && !file) || !sessionId}
-            className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
-          >
-            {running ? "處理中…" : "送出"}
-          </button>
-        </div>
-      </div>
+      <Composer
+        ref={composerRef}
+        sessionId={sessionId}
+        running={running}
+        disabled={!!pendingApproval}
+        onSend={(text, file) => void send(text, file)}
+      />
     </div>
   );
 }

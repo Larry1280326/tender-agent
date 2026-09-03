@@ -11,7 +11,7 @@ from langgraph.types import Command
 from .. import sessions
 from ..agent.agent import get_agent
 from ..schemas import ApproveRequest, ChatRequest
-from ..services.common import parse_markdown_result
+from ..services.common import format_tool_label, parse_markdown_result
 
 router = APIRouter()
 
@@ -33,7 +33,14 @@ async def _sse_stream(agent, astream_input, config) -> AsyncIterator[str]:
             if kind == "on_tool_start":
                 tool_depth += 1
                 name = event.get("name") or ""
-                yield _sse({"event": "tool_start", "node": name, "message": f"使用工具 {name}"})
+                args = (event.get("data") or {}).get("input")
+                label = format_tool_label(name, args)
+                yield _sse({
+                    "event": "tool_start",
+                    "node": name,
+                    "label": label,
+                    "message": f"使用工具 {name}",
+                })
             elif kind == "on_tool_end":
                 name = event.get("name") or ""
                 out = event["data"].get("output")

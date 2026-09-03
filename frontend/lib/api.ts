@@ -9,7 +9,7 @@ export type Session = {
 };
 
 export type TextItem = { type: "text"; text: string };
-export type ToolItem = { type: "tool"; name: string; result?: string; done: boolean };
+export type ToolItem = { type: "tool"; name: string; label?: string; result?: string; done: boolean };
 export type Item = TextItem | ToolItem;
 export type Message = { role: "user" | "assistant"; items: Item[]; docs?: { title: string; content: string }[] };
 
@@ -17,10 +17,11 @@ export type ChatEvent = {
   event: string;
   delta?: string;
   node?: string;
+  label?: string;
   message?: string;
   docs?: { title: string; content: string }[];
   interrupt_id?: string;
-  payload?: { to?: string; subject?: string; body?: string };
+  payload?: { to?: string; subject?: string; body?: string; attachments?: string[] };
 };
 
 async function json<T>(res: Response): Promise<T> {

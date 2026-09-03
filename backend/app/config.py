@@ -24,5 +24,11 @@ JINA_API_KEY = _get("JINA_API_KEY")
 GMAIL_USER = _get("GMAIL_USER")
 GMAIL_APP_PASSWORD = _get("GMAIL_APP_PASSWORD")
 
+# 寄電郵嘅公司資料（send_email 簽名／寄件人顯示名）
+COMPANY_NAME = _get("COMPANY_NAME", "竣煌有限公司")
+COMPANY_CONTACT = _get("COMPANY_CONTACT")
+COMPANY_PHONE = _get("COMPANY_PHONE")
+COMPANY_EMAIL = _get("COMPANY_EMAIL")
+
 # 資料夾（web app 專用）：招標狀態、dossiers、session、checkpoint 都放呢度
 DATA_DIR = Path(_get("TENDER_DATA_DIR", str(BACKEND_ROOT / "data"))).resolve()

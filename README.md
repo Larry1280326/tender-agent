@@ -92,7 +92,7 @@ Conneciz 公開 API 冇招標方欄位，所以用 **hybrid** 方式分「香港
 
 ## 寄電郵（send_email）
 
-agent 可以透過 Gmail 信箱代你寄電郵。因為寄信係不可逆嘅對外動作，工具會先**暫停並請你確認**收件人／主旨／內容，你喺聊天介面見到 inline 核准卡、撳「確認發送」先真正寄出。
+agent 可以透過 Gmail 信箱代你寄電郵，並可**附加本地檔案**（你上傳／agent 下載嘅檔）。公司資料（公司名／聯絡人／電話／電郵，來自 `COMPANY_*` 設定）會經 `send_email` 工具描述傳俾 LLM，由 LLM 喺電郵正文結尾寫簽名；寄件人顯示名亦用公司名。因為寄信係不可逆嘅對外動作，工具會先**暫停並請你確認**收件人／主旨／內容／附件，你喺聊天介面見到 inline 核准卡、撳「確認發送」先真正寄出。
 
 ### 設定
 
@@ -101,13 +101,21 @@ agent 可以透過 Gmail 信箱代你寄電郵。因為寄信係不可逆嘅對�
 ```bash
 GMAIL_USER=your@gmail.com
 GMAIL_APP_PASSWORD=your_16_char_app_password
+
+# 電郵公司資料（寄件人名稱＋俾 LLM 寫簽名用；冇設定就唔顯示該行）
+COMPANY_NAME=竣煌有限公司
+COMPANY_CONTACT=
+COMPANY_PHONE=
+COMPANY_EMAIL=
 ```
 
 ### 流程
 
-1. agent 決定寄信，call `send_email(to, subject, body)`，並用 LangGraph `interrupt()` 暫停（未寄出）。
-2. 後端經 SSE 出 `approval_required` 事件，前端喺對話中顯示 inline 核准卡（收件人／主旨／內容）。
+1. agent 決定寄信，call `send_email(to, subject, body, attachments=[…])`（body 已含 LLM 用公司資料寫嘅簽名），並用 LangGraph `interrupt()` 暫停（未寄出）。
+2. 後端經 SSE 出 `approval_required` 事件，前端喺對話中顯示 inline 核准卡（收件人／主旨／內容／附件）。
 3. 你撳「確認發送」→ `POST /chat/approve` 以 `Command(resume={"approved": true})` 繼續，真正寄出；撳「取消」就唔寄。
+
+> **大附件**：send 階段嘅 socket timeout 會按訊息大小自動加大（假設最慢 ~128 KB/s 上傳），所以慢 uplink 下寄大 PDF 唔會再 `Server not connected` 超時。connect／handshake 仍用 15s，不可達 host 會快啲 fail。
 
 ### 注意：VPN／代理（TUN 模式）會截走 SMTP
 

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from .. import sessions, store
 from ..agent.agent import get_agent
 from ..schemas import SessionCreate, SessionUpdate
-from ..services.common import parse_markdown_result
+from ..services.common import format_tool_label, parse_markdown_result
 
 router = APIRouter()
 
@@ -78,7 +78,11 @@ def _reconstruct(messages) -> list[dict]:
             if text:
                 items.append({"type": "text", "text": text})
             for tc in getattr(m, "tool_calls", []) or []:
-                items.append({"type": "tool", "name": tc.get("name", "tool"), "done": True})
+                item = {"type": "tool", "name": tc.get("name", "tool"), "done": True}
+                label = format_tool_label(tc.get("name", ""), tc.get("args") or {})
+                if label:
+                    item["label"] = label
+                items.append(item)
             if not items:
                 items.append({"type": "text", "text": ""})
             out.append({"role": "assistant", "items": items})

@@ -53,7 +53,7 @@ export default function Sidebar({ activeId, refreshSignal, onSelect, onCreate, o
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-3">
-        <span className="text-sm font-semibold">招標助理</span>
+        <span className="text-sm font-semibold">標書助理</span>
         <button
           onClick={handleCreate}
           disabled={busy}

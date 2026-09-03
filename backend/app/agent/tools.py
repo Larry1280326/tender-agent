@@ -168,14 +168,47 @@ def download_file(url: str, tender_id: str = "") -> str:
     )
 
 
-@tool
-def send_email(to: str, subject: str, body: str) -> str:
-    """發送電郵。寄出前會先請用戶確認收件人／主旨／內容，用戶批准後先真正寄出。to 可用逗號分隔多個收件人。"""
-    decision = interrupt({"type": "send_email_approval", "to": to, "subject": subject, "body": body})
+def _resolve_attachment(path: str) -> tuple[Path | None, str]:
+    """解析附件路徑（相對 data/ 目錄或絕對）；只准 DATA_DIR 內、白名單副檔名。"""
+    p = Path(path)
+    if not p.is_absolute():
+        p = store.DATA_DIR / p
+    p = p.resolve()
+    if not p.is_file() or not p.is_relative_to(store.DATA_DIR):
+        return None, f"找不到附件或路徑越界（只可附 {store.DATA_DIR} 內嘅檔案）：{path}"
+    if p.suffix.lower() not in utils.ALLOWED_EXTENSIONS:
+        allowed = " / ".join(sorted(utils.ALLOWED_EXTENSIONS))
+        return None, f"不支援嘅附件副檔名：{p.suffix or '(無)'}（只支援 {allowed}）。"
+    return p, ""
+
+
+_SEND_EMAIL_DOC = (
+    "發送電郵。寄出前會先請用戶確認收件人／主旨／內容／附件，用戶批准後先真正寄出。"
+    "to 可用逗號分隔多個收件人。attachments 係要附加嘅本地檔案路徑列表（同 read_file 一樣相對 data/ 目錄，例如上傳／下載回傳嘅路徑）。"
+    f"你代表{emailer.company_info()}。喺電郵正文結尾用呢啲公司資料寫簽名，唔好自行編造公司名／聯絡人／電話／電郵。"
+)
+
+
+@tool(description=_SEND_EMAIL_DOC)
+def send_email(to: str, subject: str, body: str, attachments: list[str] = []) -> str:
+    """發送電郵（描述見 _SEND_EMAIL_DOC，含公司簽名資料）。"""
+    paths: list[Path] = []
+    for a in attachments or []:
+        p, err = _resolve_attachment(a)
+        if err:
+            return err
+        paths.append(p)
+    decision = interrupt({
+        "type": "send_email_approval",
+        "to": to,
+        "subject": subject,
+        "body": body,
+        "attachments": [p.name for p in paths],
+    })
     if not isinstance(decision, dict) or not decision.get("approved"):
         return "用戶已取消，電郵未發送。"
     try:
-        return emailer.send_email(to, subject, body)
+        return emailer.send_email(to, subject, body, paths or None)
     except Exception as e:  # noqa: BLE001
         return f"發送失敗：{e}"
 

@@ -96,3 +96,27 @@ def parse_markdown_result(text: str) -> tuple[str, list[dict] | None]:
     except (json.JSONDecodeError, TypeError):
         pass
     return (text or "").strip() if isinstance(text, str) else str(text), None
+
+
+def format_tool_label(name: str, args: dict) -> str | None:
+    """工具 box 嘅顯示字串（label + 參數）；無匹配嘅工具回 None。
+
+    frontend 見到 label 就顯示 label 並隱藏工具輸出（只有呢啲工具有 label）。
+    """
+    args = args if isinstance(args, dict) else {}
+    if name == "search_web":
+        q = str(args.get("query") or "").strip()
+        return f"搜尋網頁：{q}" if q else None
+    if name == "read_page":
+        u = str(args.get("url") or "").strip()
+        return f"讀取網頁：{u}" if u else None
+    if name == "read_file":
+        p = str(args.get("path") or "").strip()
+        return f"讀取檔案：{Path(p).name}" if p else None
+    if name == "read_dossier_file":
+        f = str(args.get("filename") or "").strip()
+        return f"讀取檔案：{f}" if f else None
+    if name == "write_dossier_file":
+        f = str(args.get("filename") or "").strip()
+        return f"寫入檔案：{f}" if f else None
+    return None
