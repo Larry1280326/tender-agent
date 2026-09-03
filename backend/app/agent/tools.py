@@ -139,11 +139,7 @@ def process_tender(tender_id: str) -> str:
     if tender is None:
         return f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
     result = get_pipeline().invoke(_build_state(tender_id))
-    docs = [{"title": t, "content": c} for t, c in (
-        ("項目摘要", result.get("digest_md")),
-        ("候選產品與供應商", result.get("candidates_md")),
-    ) if c]
-    return common.markdown_result(_format_node_result("核實＋消化＋候選", result), docs)
+    return common.markdown_result(_format_node_result("核實＋消化＋候選", result), _dossier_docs(tender_id))
 
 
 @tool
@@ -170,10 +166,6 @@ def download_file(url: str, tender_id: str = "") -> str:
         f"已下載 {result['file']}（{result['size']} bytes, sha1 {result['sha1']}）→ {path}",
         None,
     )
-
-
-# read_file 回傳俾 LLM 嘅文字長度上限（避免爆 context）。
-READ_LIMIT = 20000
 
 
 @tool
@@ -209,9 +201,68 @@ def read_file(path: str) -> str:
         return f"讀取失敗：{e}"
     if not text.strip():
         return f"檔案 {p.name} 抽取唔到文字。"
-    if len(text) > READ_LIMIT:
-        text = text[:READ_LIMIT] + f"\n\n…（內容過長，共 {len(text)} 字元，已截斷至前 {READ_LIMIT} 字元）"
     return f"[{p.name}]\n{text}"
+
+
+DOSSIER_FILES = ("00_source.md", "01_digest.md", "02_candidates.md")
+DOSSIER_TITLES = {
+    "00_source.md": "官方來源核實",
+    "01_digest.md": "項目摘要",
+    "02_candidates.md": "候選產品與供應商",
+}
+
+
+def _dossier_docs(tender_id: str) -> list[dict]:
+    """讀取 dossier 內三個 markdown 檔（存在且非空者），回傳 [{title, content}]。
+
+    process_tender 完成後／write_dossier_file 更新後都靠佢，等 frontend 一次過顯示
+    全部 markdown 檔，而唔係只得單一檔。
+    """
+    dossier = store.dossier_dir(tender_id)
+    docs: list[dict] = []
+    for filename, title in DOSSIER_TITLES.items():
+        p = dossier / filename
+        if p.is_file():
+            content = p.read_text(encoding="utf-8").strip()
+            if content:
+                docs.append({"title": title, "content": content})
+    return docs
+
+
+def _dossier_file(tender_id: str, filename: str) -> tuple[Path | None, str]:
+    """解析 dossier 內 markdown 檔路徑；只准讀寫白名單三個檔。"""
+    if store.get_tender(tender_id) is None:
+        return None, f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
+    if filename not in DOSSIER_FILES:
+        allowed = " / ".join(DOSSIER_FILES)
+        return None, f"只可讀寫 dossier 內 {allowed}（收到 {filename}）。"
+    dossier = store.dossier_dir(tender_id).resolve()
+    p = (dossier / filename).resolve()
+    if not p.is_relative_to(dossier):
+        return None, f"路徑越界：{filename}"
+    return p, ""
+
+
+@tool
+def read_dossier_file(tender_id: str, filename: str) -> str:
+    """讀取該招標 dossier 內嘅 markdown 檔案：01_digest.md（項目摘要）、02_candidates.md（候選產品與供應商）、00_source.md（官方來源核實）。要更新摘要／報告前，先讀返現有內容。"""
+    p, err = _dossier_file(tender_id, filename)
+    if err:
+        return err
+    if not p.is_file():
+        return f"檔案未存在：{filename}（可能未執行 process_tender）。"
+    return f"[{filename}]\n" + p.read_text(encoding="utf-8")
+
+
+@tool
+def write_dossier_file(tender_id: str, filename: str, content: str) -> str:
+    """覆寫該招標 dossier 內嘅 markdown 檔案（只限 00_source.md / 01_digest.md / 02_candidates.md），content 係完整新 markdown。用嚟更新項目摘要或候選產品與供應商報告，唔需要重跑 process_tender。"""
+    p, err = _dossier_file(tender_id, filename)
+    if err:
+        return err
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return common.markdown_result(f"已更新 {filename}。", _dossier_docs(tender_id))
 
 
 ALL_TOOLS = [
@@ -222,5 +273,7 @@ ALL_TOOLS = [
     read_page,
     download_file,
     read_file,
+    read_dossier_file,
+    write_dossier_file,
     send_email,
 ]

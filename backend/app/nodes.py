@@ -419,11 +419,13 @@ def digest_node(state: dict) -> dict:
 CANDIDATES_AGENT_PROMPT = (
     "你是香港公開招標項目分析助手。你會收到招標資料、核實欄位同項目摘要（01_digest.md）。\n"
     "你可以 call search_web / read_page 去搜尋同該招標匹配嘅候選產品同供應商。\n"
-    "最後用正體中文寫一份結構化候選清單（markdown），直接輸出 markdown，勿加任何前後說明或程式碼框。\n"
+    "最後用正體中文寫一份結構化候選清單（markdown）並附上URL，直接輸出 markdown，勿加任何前後說明或程式碼框。\n"
     "必須包含章節：招標需求回顧（招標編號/招標方/項目名稱/截止日期/地區/範圍摘要）、"
     "候選產品（每項：名稱/規格/品牌型號/參考價格/來源連結）、"
     "候選供應商（每項：公司/簡介/可提供產品/來源連結）、"
     "評估與建議（如有）、資料來源。若資料不足，據實註明「未提供」。\n"
+    "重要：每一項候選產品同候選供應商都必須附上「來源連結」，直接貼上該產品嘅產品頁或供應商官網/聯絡頁 URL，"
+    "唔好用搜尋結果摘要替代；只有確實搵唔到任何 URL 先可以寫「未提供」。\n"
     "注意：deadline 欄位已為香港時間 HKT（UTC+8），直接採用即可。\n"
 )
 
@@ -450,6 +452,7 @@ def _llm_candidates_fallback(tender: dict, state: dict) -> str:
     prompt = (
         "你是香港公開招標項目分析助手。根據資料，用正體中文列出匹配該招標嘅候選產品同供應商（markdown）。\n"
         "必須包含章節：招標需求回顧、候選產品、候選供應商、評估與建議、資料來源。若資料不足，據實註明「未提供」。\n"
+        "每項候選產品／供應商如有來源連結（URL）請一併附上；無則註明「未提供」。\n"
         f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
         f"核實欄位：{json.dumps({k: state.get(k) for k in ('issuer', 'tender_no', 'deadline', 'official_url')}, ensure_ascii=False)}\n"
     )
