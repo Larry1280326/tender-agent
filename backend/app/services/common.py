@@ -110,6 +110,9 @@ def format_tool_label(name: str, args: dict) -> str | None:
     if name == "read_page":
         u = str(args.get("url") or "").strip()
         return f"讀取網頁：{u}" if u else None
+    if name == "download_file":
+        u = str(args.get("url") or "").strip()
+        return f"下載檔案：{u}" if u else None
     if name == "read_file":
         p = str(args.get("path") or "").strip()
         return f"讀取檔案：{Path(p).name}" if p else None
