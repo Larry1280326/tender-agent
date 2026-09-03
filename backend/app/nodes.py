@@ -155,7 +155,7 @@ def _write_source(dossier: Path, tender: dict, extracted: dict, pages: list[dict
         "",
         f"- 招標編號：{judgement.get('tender_no') or tender.get('tender_ref') or ''}",
         f"- 招標方：{judgement.get('issuer') or extracted.get('issuer') or ''}",
-        f"- 截止日期：{judgement.get('deadline') or tender.get('deadline') or ''}",
+        f"- 截止日期：{judgement.get('deadline') or extracted.get('deadline') or tender.get('deadline') or ''}",
         f"- 地區：{judgement.get('region') or '未判定'}",
         f"- 官方來源：{official_url or '(未找到，以 Conneciz 為準)'}",
     ]
@@ -273,7 +273,8 @@ def verify_node(state: dict) -> dict:
     if judgement.get("official_url"):
         official_url = judgement["official_url"]
     source_md = _write_source(dossier, tender, extracted, pages, official_url, judgement)
-    final_deadline = extracted.get("deadline") or tender.get("deadline", "")
+    # 截止日以 LLM 官方交叉核實結果為準（judgement），冇先回退 Conneciz 抽取／原始值。
+    final_deadline = judgement.get("deadline") or extracted.get("deadline") or tender.get("deadline", "")
     final_doc_links = list(dict.fromkeys(doc_links))
     set_tender_status(tid, "searched")
     # 持久化核實結果，等 download/digest 喺之後嘅 turn 都攞到 doc_links 等欄位

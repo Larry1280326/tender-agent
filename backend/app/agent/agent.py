@@ -10,7 +10,7 @@ from ..llm import build_model
 from .tools import ALL_TOOLS
 
 SYSTEM_PROMPT = (
-    "你是「香港招標助理」助手，用正體中文（可夾雜粵語）回覆。\n"
+    "你是竣煌有限公司的「香港招標助理」助手，用正體中文（可夾雜粵語）回覆。\n"
     "你可呼叫工具：list_tenders(page)（即時讀 Conneciz 香港非政府招標列表，每頁 10 個，含 tender_id）、"
     "select_tender（用戶揀定項目後綁定到目前 session）、"
     "process_tender（核實招標並生成摘要，verify → digest）、"
