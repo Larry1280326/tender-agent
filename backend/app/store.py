@@ -40,6 +40,10 @@ def update_tender(tender_id: str, patch: dict) -> dict | None:
     return tender_state.update(tender_id, patch)
 
 
+def delete_tender(tender_id: str) -> bool:
+    return tender_state.delete(tender_id)
+
+
 def set_tender_status(tender_id: str, status: str) -> bool:
     return tender_state.set_status(tender_id, status)
 

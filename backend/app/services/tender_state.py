@@ -41,6 +41,15 @@ def upsert(tender_id: str, entry: dict) -> None:
     save(data)
 
 
+def delete(tender_id: str) -> bool:
+    data = load()
+    if tender_id in data:
+        del data[tender_id]
+        save(data)
+        return True
+    return False
+
+
 def update(tender_id: str, patch: dict) -> dict | None:
     """合併 patch 入現有 entry（不存在則略過）。回傳更新後 entry。"""
     data = load()

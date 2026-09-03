@@ -60,3 +60,9 @@ def get_agent():
     if _agent is None:
         raise RuntimeError("agent 未初始化（app lifespan 應已呼叫 init_agent）")
     return _agent
+
+
+async def delete_thread(thread_id: str) -> None:
+    """刪除指定 thread（session）嘅 checkpoints/writes（供 delete session 用）。"""
+    if _agent is not None:
+        await _agent.checkpointer.adelete_thread(thread_id)

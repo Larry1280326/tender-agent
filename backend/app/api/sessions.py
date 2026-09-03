@@ -1,10 +1,12 @@
 """Session endpoints：列出／建立／改名／綁定招標 + 讀取歷史。"""
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, HTTPException
 
 from .. import sessions, store
-from ..agent.agent import get_agent
+from ..agent.agent import delete_thread, get_agent
 from ..schemas import SessionCreate, SessionUpdate
 from ..services.common import format_tool_label, parse_markdown_result
 
@@ -39,9 +41,22 @@ def update_session(session_id: str, payload: SessionUpdate):
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
-    if not sessions.delete_session(session_id):
+async def delete_session(session_id: str):
+    meta = sessions.get_session(session_id)
+    if meta is None:
         raise HTTPException(status_code=404, detail="session 不存在")
+    sessions.delete_session(session_id)
+
+    tender_id = (meta.get("tender_id") or "").strip()
+    if tender_id:
+        still_bound = any(s.get("tender_id") == tender_id for s in sessions.list_sessions())
+        if not still_bound:
+            store.delete_tender(tender_id)
+            dossier = store.dossier_dir(tender_id)
+            if dossier.exists():
+                shutil.rmtree(dossier)
+
+    await delete_thread(session_id)
     return {"ok": True}
 
 
