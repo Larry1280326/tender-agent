@@ -40,8 +40,8 @@ async def _sse_stream(agent, astream_input, config) -> AsyncIterator[str]:
                 content = getattr(out, "content", out)
                 if not isinstance(content, str):
                     content = str(out)
-                summary, markdown = parse_markdown_result(content)
-                yield _sse({"event": "tool_end", "node": name, "message": summary, "markdown": markdown})
+                summary, docs = parse_markdown_result(content)
+                yield _sse({"event": "tool_end", "node": name, "message": summary, "docs": docs})
                 tool_depth -= 1
             elif kind == "on_chat_model_stream":
                 if tool_depth > 0:

@@ -102,13 +102,13 @@ def list_tenders(page: int = 1) -> str:
         records = conneciz.dedupe(_list_candidates())
     except Exception as e:  # noqa: BLE001
         return f"暫時讀取唔到 Conneciz 招標列表（{e}），請稍後再試。"
-    print(len(records))
+    print(f"Total records: {len(records)}")
     records = [
         r for r in records
         if r.get("_id") not in seen_ids
         and (r.get("issuer_uid") or "", (r.get("deadline") or "")[:10]) not in seen_keys
     ]
-    print(len(records))
+    print(f"Filtered records: {len(records)}")
     ts = filter_hk(records, target=10, offset=(page - 1) * 10)
     if not ts:
         return "無香港非政府招標。" if page == 1 else f"第 {page} 頁冇更多香港非政府招標。"
@@ -134,12 +134,16 @@ def select_tender(tender_id: str, config: Annotated[RunnableConfig, InjectedTool
 
 @tool
 def process_tender(tender_id: str) -> str:
-    """核實指定招標並生成摘要（verify → digest）：先核實官方來源，再由 digest 子代理（可搜尋/讀頁）生成 01_digest.md。"""
+    """核實指定招標並生成摘要＋候選（verify → digest → candidates）：先核實官方來源，再由 digest 子代理生成 01_digest.md，最後由 candidates 子代理生成候選產品/供應商 02_candidates.md。"""
     tender = store.get_tender(tender_id)
     if tender is None:
         return f"找不到招標 {tender_id}（可先 select_tender 揀項目，或 list_tenders 查正確 id）。"
     result = get_pipeline().invoke(_build_state(tender_id))
-    return common.markdown_result(_format_node_result("核實＋消化", result), result.get("digest_md"))
+    docs = [{"title": t, "content": c} for t, c in (
+        ("項目摘要", result.get("digest_md")),
+        ("候選產品與供應商", result.get("candidates_md")),
+    ) if c]
+    return common.markdown_result(_format_node_result("核實＋消化＋候選", result), docs)
 
 
 @tool

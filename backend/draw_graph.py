@@ -5,8 +5,9 @@ Usage:
 
 Produces, in backend/:
     agent_graph.png / .mmd         — main chatbot ReAct agent (8 tools)
-    pipeline_graph.png / .mmd      — per-tender verify -> digest StateGraph
+    pipeline_graph.png / .mmd      — per-tender verify -> digest -> candidates StateGraph
     digest_agent_graph.png / .mmd  — digest sub-agent (search_web / read_page)
+    candidates_agent_graph.png/.mmd — candidates sub-agent (search_web / read_page)
 
 The diagrams annotate the tools each node can use: the ReAct `tools` node
 (ToolNode) dispatches to its bound tools, and the pipeline nodes annotate the
@@ -64,13 +65,14 @@ def _react_agent_mermaid(title: str, model: str, tools: list[str]) -> str:
 
 
 def _pipeline_mermaid() -> str:
-    """Per-tender pipeline: verify -> digest, with the services/sub-agent each node calls."""
+    """Per-tender pipeline: verify -> digest -> candidates, with services/sub-agents each node calls."""
     return "\n".join([
         _FRONTMATTER,
         "graph TD;",
         "\t__start__([__start__]) --> verify",
         "\tverify --> digest",
-        "\tdigest --> __end__([__end__])",
+        "\tdigest --> candidates",
+        "\tcandidates --> __end__([__end__])",
         "",
         "\t%% verify node: fetch + cross-check via services (not LangChain tools)",
         '\tverify["verify"] -.-> v1["reader.read · Jina<br/><small>Conneciz detail + official pages</small>"]',
@@ -81,6 +83,11 @@ def _pipeline_mermaid() -> str:
         '\tdigest["digest"] -.-> d1["digest sub-agent"]',
         '\td1 -.-> d2["search_web"]',
         '\td1 -.-> d3["read_page"]',
+        "",
+        "\t%% candidates node: spins up an agentic sub-agent",
+        '\tcandidates["candidates"] -.-> c1["candidates sub-agent"]',
+        '\tc1 -.-> c2["search_web"]',
+        '\tc1 -.-> c3["read_page"]',
     ]) + "\n"
 
 
@@ -112,6 +119,15 @@ async def main() -> None:
             "digest_agent_graph",
             _react_agent_mermaid(
                 "digest sub-agent",
+                config.DEEPSEEK_MODEL,
+                [t.name for t in (search_web, read_page)],
+            ),
+            out_dir,
+        )
+        _render(
+            "candidates_agent_graph",
+            _react_agent_mermaid(
+                "candidates sub-agent",
                 config.DEEPSEEK_MODEL,
                 [t.name for t in (search_web, read_page)],
             ),

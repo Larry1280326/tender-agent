@@ -26,6 +26,7 @@ class PipelineState(TypedDict, total=False):
     doc_links: list[str]
     source_md: str
     digest_md: str
+    candidates_md: str
     logs: Annotated[list[dict], operator.add]
     error: str
 
@@ -34,9 +35,11 @@ def _build_graph():
     graph = StateGraph(PipelineState)
     graph.add_node("verify", nodes.verify_node)
     graph.add_node("digest", nodes.digest_node)
+    graph.add_node("candidates", nodes.candidates_node)
     graph.add_edge(START, "verify")
     graph.add_edge("verify", "digest")
-    graph.add_edge("digest", END)
+    graph.add_edge("digest", "candidates")
+    graph.add_edge("candidates", END)
     return graph.compile()
 
 

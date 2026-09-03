@@ -146,7 +146,7 @@ export default function Chat({
                 break;
               }
             }
-            return { ...m, items, markdown: e.markdown || m.markdown };
+            return { ...m, items, docs: e.docs || m.docs };
           });
           if (e.node === "select_tender") onSessionsChanged?.();
         } else if (e.event === "approval_required") {
@@ -198,7 +198,7 @@ export default function Chat({
                 break;
               }
             }
-            return { ...m, items, markdown: e.markdown || m.markdown };
+            return { ...m, items, docs: e.docs || m.docs };
           });
         } else if (e.event === "approval_required") {
           setPendingApproval(e.payload || null);
@@ -302,18 +302,22 @@ export default function Chat({
                   </div>
                 ),
               )}
-              {m.role === "assistant" && m.markdown && (
-                <div className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm">
-                  <details>
-                    <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
-                      查看 Markdown 內容
-                    </summary>
-                    <div className="prose prose-sm max-w-none mt-2 text-slate-700">
-                      <Markdown content={m.markdown} />
-                    </div>
-                  </details>
-                </div>
-              )}
+              {m.role === "assistant" &&
+                (m.docs ?? []).map((doc, di) => (
+                  <div
+                    key={di}
+                    className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
+                  >
+                    <details>
+                      <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">
+                        {doc.title}
+                      </summary>
+                      <div className="prose prose-sm max-w-none mt-2 text-slate-700">
+                        <Markdown content={doc.content} />
+                      </div>
+                    </details>
+                  </div>
+                ))}
             </div>
           </div>
         ))}

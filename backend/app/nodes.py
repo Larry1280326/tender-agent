@@ -414,3 +414,92 @@ def digest_node(state: dict) -> dict:
     set_tender_status(tid, "digested")
     logs.append(_log("digest", "已生成 01_digest.md"))
     return {"status": "digested", "logs": logs, "digest_md": digest_md}
+
+
+CANDIDATES_AGENT_PROMPT = (
+    "你是香港公開招標項目分析助手。你會收到招標資料、核實欄位同項目摘要（01_digest.md）。\n"
+    "你可以 call search_web / read_page 去搜尋同該招標匹配嘅候選產品同供應商。\n"
+    "最後用正體中文寫一份結構化候選清單（markdown），直接輸出 markdown，勿加任何前後說明或程式碼框。\n"
+    "必須包含章節：招標需求回顧（招標編號/招標方/項目名稱/截止日期/地區/範圍摘要）、"
+    "候選產品（每項：名稱/規格/品牌型號/參考價格/來源連結）、"
+    "候選供應商（每項：公司/簡介/可提供產品/來源連結）、"
+    "評估與建議（如有）、資料來源。若資料不足，據實註明「未提供」。\n"
+    "注意：deadline 欄位已為香港時間 HKT（UTC+8），直接採用即可。\n"
+)
+
+_candidates_agent = None
+
+
+def _get_candidates_agent():
+    """candidates 子代理（可 call search_web/read_page）；lazy 建立，無 checkpointer。"""
+    global _candidates_agent
+    if _candidates_agent is None:
+        from langgraph.prebuilt import create_react_agent
+
+        from .agent.web_tools import read_page, search_web
+        from .llm import build_model
+
+        _candidates_agent = create_react_agent(
+            build_model(), [search_web, read_page], prompt=CANDIDATES_AGENT_PROMPT
+        )
+    return _candidates_agent
+
+
+def _llm_candidates_fallback(tender: dict, state: dict) -> str:
+    """LLM 生成候選清單；失敗時回退欄位式清單。"""
+    prompt = (
+        "你是香港公開招標項目分析助手。根據資料，用正體中文列出匹配該招標嘅候選產品同供應商（markdown）。\n"
+        "必須包含章節：招標需求回顧、候選產品、候選供應商、評估與建議、資料來源。若資料不足，據實註明「未提供」。\n"
+        f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
+        f"核實欄位：{json.dumps({k: state.get(k) for k in ('issuer', 'tender_no', 'deadline', 'official_url')}, ensure_ascii=False)}\n"
+    )
+    try:
+        from .llm import build_model
+        model = build_model()
+        resp = model.invoke([("system", "你是香港招標分析助手，輸出 markdown。"), ("human", prompt)])
+        content = resp.content if isinstance(resp.content, str) else str(resp.content)
+        return content.strip()
+    except Exception as e:  # noqa: BLE001
+        return (
+            "# 候選產品與供應商（自動回退，LLM 生成失敗）\n\n"
+            f"- 招標編號：{state.get('tender_no') or tender.get('tender_ref')}\n"
+            f"- 招標方：{state.get('issuer')}\n"
+            f"- 項目名稱：{tender.get('title_en') or tender.get('title_zh')}\n"
+            f"- 截止日期：{state.get('deadline') or tender.get('deadline')}\n"
+            f"- 候選產品／供應商：未提供（LLM 錯誤：{e}）\n"
+        )
+
+
+def _agentic_candidates(tender: dict, state: dict, context: str) -> str:
+    """candidates 子代理生成候選清單 markdown；失敗回退欄位式 _llm_candidates_fallback。"""
+    prompt = (
+        f"招標資料：{json.dumps(tender, ensure_ascii=False)}\n"
+        f"核實欄位：{json.dumps({k: state.get(k) for k in ('issuer', 'tender_no', 'deadline', 'official_url')}, ensure_ascii=False)}\n"
+        f"項目摘要（01_digest.md）：\n{context}\n"
+    )
+    try:
+        agent = _get_candidates_agent()
+        result = agent.invoke({"messages": [("user", prompt)]})
+        md = _final_answer(result.get("messages", []))
+        return md or _llm_candidates_fallback(tender, state)
+    except Exception:  # noqa: BLE001
+        return _llm_candidates_fallback(tender, state)
+
+
+def candidates_node(state: dict) -> dict:
+    logs: list[dict] = []
+    tid = state["tender_id"]
+    dossier = Path(state["dossier_dir"])
+    tender = state["tender"]
+
+    context = state.get("digest_md") or ""
+    if not context:
+        digest = dossier / "01_digest.md"
+        if digest.exists():
+            context = digest.read_text(encoding="utf-8")
+
+    candidates_md = _agentic_candidates(tender, state, context)
+    (dossier / "02_candidates.md").write_text(candidates_md, encoding="utf-8")
+    set_tender_status(tid, "matched")
+    logs.append(_log("candidates", "已生成 02_candidates.md"))
+    return {"status": "matched", "logs": logs, "candidates_md": candidates_md}

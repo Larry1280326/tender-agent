@@ -68,19 +68,31 @@ class TTLCache:
             self._data.pop(oldest, None)
 
 
-def markdown_result(summary: str, markdown: str | None) -> str:
-    """tool 回傳：summary 俾 LLM 睇，markdown 俾 frontend 渲染。"""
-    if not markdown:
+def markdown_result(summary: str, docs: list[dict] | None) -> str:
+    """tool 回傳：summary 俾 LLM 睇，docs（[{title, content}]）俾 frontend 渲染。"""
+    if not docs:
         return summary
-    return json.dumps({"summary": summary, "markdown": markdown}, ensure_ascii=False)
+    return json.dumps({"summary": summary, "docs": docs}, ensure_ascii=False)
 
 
-def parse_markdown_result(text: str) -> tuple[str, str | None]:
-    """反解 markdown_result；非 JSON 就原樣回傳 (text, None)。"""
+def parse_markdown_result(text: str) -> tuple[str, list[dict] | None]:
+    """反解 markdown_result；非 JSON 就原樣回傳 (text, None)。
+
+    同時接受舊版 "markdown" 欄位（單一 markdown 字串），包裝成 docs=[{title, content}]，
+    等已記錄嘅 session 歷史仍可渲染。
+    """
     try:
         data = json.loads(text)
-        if isinstance(data, dict) and "markdown" in data:
-            return data.get("summary") or "", data.get("markdown") or None
+        if isinstance(data, dict):
+            summary = data.get("summary") or ""
+            if "docs" in data:
+                docs = data.get("docs")
+                if isinstance(docs, list):
+                    return summary, [d for d in docs if isinstance(d, dict)] or None
+                return summary, None
+            if "markdown" in data:
+                markdown = data.get("markdown")
+                return summary, [{"title": "Markdown", "content": markdown}] if markdown else None
     except (json.JSONDecodeError, TypeError):
         pass
     return (text or "").strip() if isinstance(text, str) else str(text), None

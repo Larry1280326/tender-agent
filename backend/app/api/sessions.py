@@ -89,10 +89,10 @@ def _reconstruct(messages) -> list[dict]:
                     for j in range(len(out[i]["items"]) - 1, -1, -1):
                         item = out[i]["items"][j]
                         if item["type"] == "tool" and "result" not in item:
-                            summary, markdown = parse_markdown_result(_extract_text(m.content))
+                            summary, docs = parse_markdown_result(_extract_text(m.content))
                             item["result"] = summary
-                            if markdown:
-                                out[i]["markdown"] = markdown
+                            if docs:
+                                out[i]["docs"] = docs
                             break
                     break
         # SystemMessage 忽略

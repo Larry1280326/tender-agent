@@ -11,14 +11,14 @@ export type Session = {
 export type TextItem = { type: "text"; text: string };
 export type ToolItem = { type: "tool"; name: string; result?: string; done: boolean };
 export type Item = TextItem | ToolItem;
-export type Message = { role: "user" | "assistant"; items: Item[]; markdown?: string };
+export type Message = { role: "user" | "assistant"; items: Item[]; docs?: { title: string; content: string }[] };
 
 export type ChatEvent = {
   event: string;
   delta?: string;
   node?: string;
   message?: string;
-  markdown?: string;
+  docs?: { title: string; content: string }[];
   interrupt_id?: string;
   payload?: { to?: string; subject?: string; body?: string };
 };
