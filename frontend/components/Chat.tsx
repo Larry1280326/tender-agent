@@ -39,8 +39,8 @@ const MessageBubble = memo(function MessageBubble({
       <div
         className={
           message.role === "user"
-            ? "max-w-[85%] rounded-2xl bg-slate-900 px-4 py-2 text-sm text-white"
-            : "max-w-[85%] space-y-2"
+            ? "max-w-[70%] rounded-2xl bg-slate-900 px-4 py-2 text-sm text-white"
+            : "max-w-[70%] space-y-2"
         }
       >
         {message.items.map((item, j) =>
@@ -52,7 +52,7 @@ const MessageBubble = memo(function MessageBubble({
             ) : (
               <div
                 key={j}
-                className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
+                className="prose prose-sm max-w-none overflow-x-auto rounded-2xl bg-white px-4 py-2 shadow-sm"
               >
                 <Markdown content={item.text || (running ? "…" : "")} />
               </div>
@@ -77,7 +77,7 @@ const MessageBubble = memo(function MessageBubble({
           (message.docs ?? []).map((doc, di) => (
             <div
               key={di}
-              className="prose prose-sm max-w-none rounded-2xl bg-white px-4 py-2 shadow-sm"
+              className="prose prose-sm max-w-none overflow-x-auto rounded-2xl bg-white px-4 py-2 shadow-sm"
             >
               <details>
                 <summary className="cursor-pointer select-none font-medium text-sky-700 hover:underline">

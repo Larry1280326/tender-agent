@@ -50,7 +50,7 @@ export default function Home() {
         }}
         onDelete={handleDelete}
       />
-      <div className="flex-1">
+      <div className="flex-1 min-w-0">
         <Chat
           sessionId={sessionId}
           sessionTitle={sessionTitle}

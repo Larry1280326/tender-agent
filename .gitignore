@@ -5,6 +5,9 @@ __pycache__/
 # web app
 backend/.env
 backend/data/
+
+# runtime state (pid files + logs from scripts/start.*)
+.run/
 frontend/node_modules/
 frontend/.next/
 frontend/.env.local
