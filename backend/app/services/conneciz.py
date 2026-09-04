@@ -201,7 +201,7 @@ def dedupe(records: list[dict]) -> list[dict]:
     return out
 
 
-_fetch_cache = TTLCache(ttl=300.0, maxsize=8)
+_fetch_cache = TTLCache(ttl=7200.0, maxsize=8)
 
 
 def fetch_tenders(

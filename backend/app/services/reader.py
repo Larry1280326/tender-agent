@@ -11,7 +11,7 @@ JINA_READER = "https://r.jina.ai/"
 
 # 短 TTL cache：同一 session 內重複讀同一 URL 唔使再打 Jina（Jina 慢、且易 rate-limit）。
 # lock 保護 cache dict（parallel fetch 時多線程讀寫）。
-_reader_cache = TTLCache(ttl=600.0, maxsize=256)
+_reader_cache = TTLCache(ttl=7200.0, maxsize=256)
 _cache_lock = threading.Lock()
 
 # ── 抽取 regex（中文標籤專做 Conneciz 頁，英文標籤做官方通告頁） ─────────────

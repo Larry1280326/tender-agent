@@ -79,7 +79,7 @@ def classify(rec: dict) -> dict:
     }
 
 
-_detail_cache = TTLCache(ttl=300.0, maxsize=256)
+_detail_cache = TTLCache(ttl=7200.0, maxsize=256)
 
 
 def _read_detail(rec: dict, retries: int = 1, backoff: float = 1.5) -> str:
