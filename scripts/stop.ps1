@@ -31,15 +31,15 @@ function Stop-Service([string]$Name, [string]$PidFile, [int]$Port) {
     if (Test-Path $PidFile) {
         $raw = Get-Content $PidFile -ErrorAction SilentlyContinue
         if ($raw -match '^\d+$') {
-            $pid = [int]$raw
-            if (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
-                Write-Host "▶ Stopping ${Name} (pid ${pid}) ..."
+            $procId = [int]$raw
+            if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
+                Write-Host "▶ Stopping ${Name} (pid ${procId}) ..."
                 # /T kills the child tree (uv -> uvicorn; cmd -> npm -> node -> next).
-                taskkill /F /T /PID $pid 2>&1 | Out-Null
+                taskkill /F /T /PID $procId 2>&1 | Out-Null
                 $stopped = $true
                 Write-Host "  ✓ ${Name} stopped"
             } else {
-                Write-Host "${Name}: pid file present but process ${pid} not running"
+                Write-Host "${Name}: pid file present but process ${procId} not running"
             }
         }
         Remove-Item $PidFile -Force -ErrorAction SilentlyContinue

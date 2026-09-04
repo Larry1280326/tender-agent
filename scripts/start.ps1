@@ -13,7 +13,7 @@ param(
     [ValidateSet('all', 'backend', 'frontend')]
     [string]$Service = 'all',
 
-    [string]$Host = '127.0.0.1',
+    [string]$BindHost = '127.0.0.1',
     [int]$BackendPort = 8000,
     [int]$FrontendPort = 3000,
     [switch]$Prod
@@ -67,7 +67,7 @@ function Start-Backend {
     }
     Write-Host "▶ Starting backend on http://localhost:${BackendPort} ..."
 
-    $args = @('run', 'uvicorn', 'app.main:app', '--host', $Host, '--port', "$BackendPort")
+    $args = @('run', 'uvicorn', 'app.main:app', '--host', $BindHost, '--port', "$BackendPort")
     if (-not $Prod) { $args += '--reload' }
 
     $proc = Start-Process -FilePath 'uv' `
