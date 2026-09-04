@@ -4,7 +4,7 @@ Usage:
     python draw_graph.py            # from backend/ (or .venv/Scripts/python.exe draw_graph.py)
 
 Produces, in backend/:
-    agent_graph.png / .mmd         — main chatbot ReAct agent (8 tools)
+    agent_graph.png / .mmd         — main chatbot ReAct agent (10 tools)
     pipeline_graph.png / .mmd      — per-tender verify -> digest -> candidates StateGraph
     digest_agent_graph.png / .mmd  — digest sub-agent (search_web / read_page)
     candidates_agent_graph.png/.mmd — candidates sub-agent (search_web / read_page)
